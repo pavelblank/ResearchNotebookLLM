@@ -1,0 +1,41 @@
+{
+  "providers": [
+    {
+      "id": "p1",
+      "name": "OR Gemini 2.5 Flash",
+      "description": "Google Gemini — often free on OpenRouter",
+      "url": "https://openrouter.ai/api/v1",
+      "model": "google/gemini-2.5-flash",
+      "api_key": "sk-or-YOUR_OPENROUTER_KEY_HERE",
+      "enabled": true
+    },
+    {
+      "id": "p2",
+      "name": "NV Gemma 4 31B",
+      "description": "Free NVIDIA NIM — Google open model",
+      "url": "https://integrate.api.nvidia.com/v1",
+      "model": "google/gemma-4-31b-it",
+      "api_key": "nvapi-YOUR_NVIDIA_KEY_HERE",
+      "enabled": true
+    },
+    {
+      "id": "p3",
+      "name": "OR GPT-4o-mini",
+      "description": "OpenAI GPT-4o-mini via OpenRouter",
+      "url": "https://openrouter.ai/api/v1",
+      "model": "openai/gpt-4o-mini",
+      "api_key": "sk-or-YOUR_OPENROUTER_KEY_HERE",
+      "enabled": false
+    },
+    {
+      "id": "p4",
+      "name": "Ollama Local",
+      "description": "Local model — no API key needed",
+      "url": "http://localhost:11434",
+      "model": "qwen2.5:3b",
+      "api_key": "ollama",
+      "enabled": true,
+      "is_ollama": true
+    }
+  ]
+}

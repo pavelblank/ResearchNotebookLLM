@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+{% block title %} · Home{% endblock %}
+
+{% block sidebar_projects %}
+{% for nb in notebooks %}
+<div class="sidebar-item" data-name="{{ nb.name|lower }}" id="sb-proj-{{ loop.index }}" onclick="window.location.href='/notebook/{{ nb.id }}'">
+  <div class="sidebar-item-icon">📁</div>
+  <span class="sidebar-item-text">{{ nb.name[:22] }}{% if nb.name|length > 22 %}…{% endif %}</span>
+  <span class="sidebar-item-badge">{{ nb.count }}</span>
+  <button class="sidebar-item-del" title="Move to Trash"
+    onclick="event.stopPropagation();deleteProject('{{ nb.name }}',document.getElementById('sb-proj-{{ loop.index }}'))">✕</button>
+</div>
+{% endfor %}
+{% if not notebooks %}
+  <div style="padding:8px 12px;font-size:.76rem;color:var(--text-muted)">No projects yet</div>
+{% endif %}
+{% endblock %}
+
+{% block head %}
+<style>
+.stat-strip{
+  display:grid;grid-template-columns:repeat(3,1fr);gap:12px;
+  margin-bottom:24px;
+}
+.stat-card{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius-sm);padding:16px 18px;
+  transition:var(--transition);
+}
+.stat-card:hover{border-color:var(--border-glow)}
+.stat-num{font-size:1.9rem;font-weight:800;letter-spacing:-.04em;line-height:1;color:#fff}
+.stat-label{font-size:.72rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-top:4px}
+
+.how-card{
+  display:flex;gap:16px;align-items:flex-start;
+  padding:16px;border-radius:var(--radius-sm);
+  background:rgba(124,117,245,.04);
+  border:1px solid rgba(124,117,245,.1);
+  transition:var(--transition);
+}
+.how-card:hover{border-color:rgba(124,117,245,.22);background:rgba(124,117,245,.07)}
+.how-step{
+  width:32px;height:32px;border-radius:50%;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;
+  font-size:.78rem;font-weight:800;
+  background:rgba(124,117,245,.15);border:1px solid rgba(124,117,245,.25);
+  color:var(--accent-bright);
+}
+
+.action-card{
+  cursor:pointer;padding:22px 20px;
+  display:flex;flex-direction:column;gap:10px;
+  transition:var(--transition);
+  border-radius:var(--radius);
+  background:var(--surface);
+  border:1px solid var(--border);
+  backdrop-filter:blur(12px);
+}
+.action-card:hover{
+  border-color:var(--border-glow);
+  box-shadow:var(--shadow-glow);
+  transform:translateY(-2px);
+}
+.action-card-icon{
+  width:44px;height:44px;border-radius:var(--radius-sm);
+  display:flex;align-items:center;justify-content:center;
+  font-size:1.25rem;
+  flex-shrink:0;
+}
+.project-row{
+  display:flex;align-items:center;gap:12px;
+  padding:10px 12px;border-radius:var(--radius-sm);
+  text-decoration:none;border:1px solid transparent;
+  transition:var(--transition);
+}
+.project-row:hover{
+  background:rgba(124,117,245,.05);
+  border-color:rgba(124,117,245,.15);
+}
+.project-row:hover .proj-del-btn{opacity:1!important;pointer-events:auto!important}
+.proj-del-btn:hover{background:rgba(255,96,144,.1)!important;color:var(--accent3)!important;border-color:rgba(255,96,144,.2)!important}
+.project-row-icon{
+  width:36px;height:36px;border-radius:var(--radius-xs);
+  background:rgba(124,117,245,.08);
+  border:1px solid rgba(124,117,245,.12);
+  display:flex;align-items:center;justify-content:center;
+  font-size:.9rem;flex-shrink:0;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div style="max-width:740px">
+
+  <!-- ── Hero ────────────────────────────────────────────── -->
+  <div class="animate-in" style="margin-bottom:32px">
+    <div style="font-size:.78rem;font-weight:600;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase;margin-bottom:10px">
+      Research Intelligence
+    </div>
+    <h1 style="font-size:2rem;font-weight:800;letter-spacing:-.04em;line-height:1.15;margin-bottom:10px">
+      {% if notebooks %}
+        Welcome back<span class="grad-text"> to your Research NoteBook</span>
+      {% else %}
+        Your private<span class="grad-text"> research brain</span>
+      {% endif %}
+    </h1>
+    <p style="color:var(--text-secondary);font-size:.88rem;line-height:1.7;max-width:520px">
+      {% if notebooks %}
+        You have <strong style="color:var(--accent-bright)">{{ notebooks|length }} project{{ 's' if notebooks|length != 1 }}</strong>.
+        Select one from the sidebar or create a new one below.
+      {% else %}
+        Create a project, add your PDFs and sources, then ask questions.
+        Everything stays private on your machine — no cloud uploads.
+      {% endif %}
+    </p>
+  </div>
+
+  <!-- ── Stats strip ──────────────────────────────────── -->
+  {% if notebooks %}
+  <div class="stat-strip animate-in-2">
+    <div class="stat-card">
+      <div class="stat-num grad-text">{{ notebooks|length }}</div>
+      <div class="stat-label">Project{{ 's' if notebooks|length != 1 }}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num grad-text">{{ total_sources }}</div>
+      <div class="stat-label">Source{{ 's' if total_sources != 1 }}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num grad-text">{{ total_notes }}</div>
+      <div class="stat-label">Note{{ 's' if total_notes != 1 }}</div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- ── Projects list ──────────────────────────────────── -->
+  {% if notebooks %}
+  <div class="card animate-in-3">
+    <div class="card-header">
+      <span class="card-title">Recent Projects</span>
+      <span class="badge badge-gray">{{ notebooks|length }}</span>
+    </div>
+    <div style="display:grid;gap:4px">
+    {% for nb in notebooks[:10] %}
+      <div class="project-row" id="proj-row-{{ loop.index }}">
+        <a href="/notebook/{{ nb.id }}" style="display:flex;align-items:center;gap:12px;flex:1;min-width:0;text-decoration:none">
+          <div class="project-row-icon">📁</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-weight:600;color:#fff;font-size:.86rem" class="truncate">{{ nb.name }}</div>
+            <div class="flex items-center gap-2 mt-1">
+              <span class="text-xs text-muted">
+                {{ nb.source_count if nb.source_count is defined else 0 }} source{{ 's' if (nb.source_count|default(0)) != 1 }}
+              </span>
+              {% if nb.created %}
+              <span class="text-xs" style="color:var(--border-light)">·</span>
+              <span class="text-xs text-muted">{{ nb.created[:10] }}</span>
+              {% endif %}
+            </div>
+          </div>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--text-muted);flex-shrink:0"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </a>
+        <button
+          onclick="event.stopPropagation();deleteProject('{{ nb.name }}',document.getElementById('proj-row-{{ loop.index }}'))"
+          title="Move to Trash"
+          style="flex-shrink:0;padding:5px 8px;border-radius:var(--radius-xs);border:1px solid transparent;
+                 background:transparent;color:var(--text-muted);cursor:pointer;font-size:.78rem;
+                 transition:var(--transition);opacity:0;pointer-events:none"
+          class="proj-del-btn">
+          🗑️
+        </button>
+      </div>
+    {% endfor %}
+    </div>
+  </div>
+  {% else %}
+  <!-- Empty state -->
+  <div class="card animate-in-3" style="border-style:dashed;border-color:rgba(124,117,245,.2)">
+    <div class="empty-state">
+      <div class="empty-icon">📓</div>
+      <div class="empty-title">No projects yet</div>
+      <div class="empty-text" style="margin-bottom:16px">
+        Create your first project to start adding PDFs, URLs, and text sources.
+      </div>
+      <button class="btn btn-primary btn-sm" onclick="showNewProjectModal()">
+        Create First Project
+      </button>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- ── How it works ──────────────────────────────────── -->
+  <div class="animate-in-4" style="margin-top:32px">
+    <div style="font-size:.72rem;font-weight:700;color:var(--text-muted);letter-spacing:.08em;text-transform:uppercase;margin-bottom:14px">
+      How it works
+    </div>
+    <div style="display:grid;gap:10px">
+
+      <div class="how-card">
+        <div class="how-step">1</div>
+        <div>
+          <div style="font-weight:700;font-size:.86rem;color:#fff;margin-bottom:3px">Create a Project</div>
+          <div class="text-xs text-muted" style="line-height:1.6">
+            Click <strong style="color:var(--text-secondary)">+ New Project</strong> in the sidebar. Give it a name — one project per research topic works best.
+          </div>
+        </div>
+      </div>
+
+      <div class="how-card">
+        <div class="how-step">2</div>
+        <div>
+          <div style="font-weight:700;font-size:.86rem;color:#fff;margin-bottom:3px">Add Your Sources</div>
+          <div class="text-xs text-muted" style="line-height:1.6">
+            Upload PDFs, paste URLs, add YouTube links, or type text directly. All content is processed and indexed locally — nothing leaves your machine.
+          </div>
+        </div>
+      </div>
+
+      <div class="how-card">
+        <div class="how-step">3</div>
+        <div>
+          <div style="font-weight:700;font-size:.86rem;color:#fff;margin-bottom:3px">Ask &amp; Discover</div>
+          <div class="text-xs text-muted" style="line-height:1.6">
+            Use the <strong style="color:var(--text-secondary)">AI Chat</strong> to ask questions about your sources. Answers are grounded exclusively in your documents — no hallucinated facts.
+          </div>
+        </div>
+      </div>
+
+      <div class="how-card">
+        <div class="how-step">4</div>
+        <div>
+          <div style="font-weight:700;font-size:.86rem;color:#fff;margin-bottom:3px">Save Notes &amp; Summaries</div>
+          <div class="text-xs text-muted" style="line-height:1.6">
+            Pin important findings as Notes, generate a full Summary, or export a research Guide — all from the tabs inside each project.
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+{% endblock %}

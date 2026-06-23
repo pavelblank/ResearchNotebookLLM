@@ -1,0 +1,1912 @@
+{% extends "base.html" %}
+{% block title %} — {{ notebook }}{% endblock %}
+
+{% block sidebar_projects %}
+{% for nb in notebooks %}
+<div class="sidebar-item {% if nb.name == notebook %}active{% endif %}" data-name="{{ nb.name|lower }}"
+     id="sb-proj-{{ loop.index }}" onclick="window.location.href='/notebook/{{ nb.id }}'">
+  <div class="sidebar-item-icon">📁</div>
+  <span class="sidebar-item-text">{{ nb.name[:22] }}{% if nb.name|length > 22 %}…{% endif %}</span>
+  <span class="sidebar-item-badge">{{ nb.count }}</span>
+  <button class="sidebar-item-del" title="Move to Trash"
+    onclick="event.stopPropagation();deleteProject('{{ nb.name }}',document.getElementById('sb-proj-{{ loop.index }}'))">✕</button>
+</div>
+{% endfor %}
+{% endblock %}
+
+{% block topbar_actions %}{% endblock %}
+
+{% block head %}
+<style>
+/* ── Three-panel workspace ──────────────────────────────── */
+.workspace{
+  display:grid;
+  grid-template-columns:290px 1fr;
+  grid-template-rows:1fr;
+  gap:12px;
+  /* 42px topbar + 42px topbar inside main-content + ~62px page header */
+  height:calc(100vh - 42px - 68px);
+}
+.workspace.guide-visible{grid-template-columns:290px 1fr 310px}
+.ws-pane{display:flex;flex-direction:column;height:100%;overflow:hidden;min-height:0}
+
+/* ── Source items ───────────────────────────────────────── */
+.source-item{
+  display:flex;align-items:center;gap:9px;
+  padding:8px 10px;border-radius:var(--radius-xs);
+  transition:var(--transition);cursor:pointer;
+  border:1px solid transparent;position:relative;
+}
+.source-item:hover{background:rgba(255,255,255,.03);border-color:var(--border)}
+.source-item.active{background:var(--accent-dim);border-color:rgba(124,117,245,.2)}
+.source-icon{font-size:.88rem;flex-shrink:0;width:22px;text-align:center}
+.source-name{font-size:.79rem;font-weight:500;color:var(--text)}
+.source-meta{font-size:.66rem;color:var(--text-muted);margin-top:1px}
+.source-actions{
+  display:flex;gap:2px;flex-shrink:0;
+  opacity:0;transition:opacity .18s;
+}
+.source-item:hover .source-actions{opacity:1}
+.source-item:hover{background:rgba(255,255,255,.03);border-color:var(--border)}
+/* make action buttons slightly smaller to fit 4 in a row */
+.source-item .msg-action-btn{padding:2px 6px;font-size:.66rem}
+
+/* ── Chat messages ──────────────────────────────────────── */
+.msg-wrap{display:flex;flex-direction:column;gap:4px;animation:fadeUp .2s ease-out both}
+.msg-user{
+  align-self:flex-end;max-width:82%;
+  background:linear-gradient(135deg,rgba(124,117,245,.18),rgba(0,201,160,.1));
+  border:1px solid rgba(124,117,245,.18);
+  border-radius:18px 18px 4px 18px;
+  padding:10px 14px;font-size:.84rem;line-height:1.65;white-space:pre-wrap;
+}
+.msg-ai-wrap{align-self:flex-start;max-width:88%;display:flex;flex-direction:column;gap:6px}
+.msg-ai{
+  background:var(--surface-hover);
+  border:1px solid var(--border-light);
+  border-radius:4px 18px 18px 18px;
+  padding:12px 16px;font-size:.84rem;line-height:1.7;
+}
+/* markdown inside ai */
+.msg-ai p{margin:0 0 .55em}.msg-ai p:last-child{margin:0}
+.msg-ai h1,.msg-ai h2,.msg-ai h3{color:#fff;font-weight:700;margin:.7em 0 .3em;font-size:.9em;letter-spacing:-.01em}
+.msg-ai h1:first-child,.msg-ai h2:first-child,.msg-ai h3:first-child{margin-top:0}
+.msg-ai ul,.msg-ai ol{padding-left:1.3em;margin:.25em 0 .5em}
+.msg-ai li{margin:.18em 0}
+.msg-ai code{font-family:'JetBrains Mono',monospace;font-size:.78em;padding:1px 5px;background:rgba(124,117,245,.12);border-radius:4px;color:var(--accent-bright)}
+.msg-ai pre{background:rgba(0,0,0,.3);border:1px solid var(--border);border-radius:8px;padding:10px 12px;overflow-x:auto;margin:.4em 0}
+.msg-ai pre code{background:none;padding:0;color:var(--text-secondary);font-size:.8em}
+.msg-ai strong{color:#fff;font-weight:600}
+.msg-ai em{color:var(--text-secondary)}
+.msg-ai blockquote{border-left:2px solid var(--accent);padding-left:10px;color:var(--text-secondary);margin:.4em 0;font-style:italic}
+.msg-ai a{color:var(--accent-bright)}
+.msg-ai table{border-collapse:collapse;width:100%;margin:.5em 0;font-size:.8em}
+.msg-ai th,.msg-ai td{padding:5px 9px;border:1px solid var(--border);text-align:left}
+.msg-ai th{background:rgba(124,117,245,.1);color:#fff;font-weight:600}
+
+/* Citation chips */
+.citations{display:flex;flex-wrap:wrap;gap:4px}
+.cite-chip{
+  display:inline-flex;align-items:center;gap:4px;
+  padding:3px 9px;
+  background:rgba(124,117,245,.08);
+  border:1px solid rgba(124,117,245,.18);
+  border-radius:var(--radius-pill);
+  font-size:.68rem;color:var(--accent-bright);
+  cursor:pointer;transition:var(--transition);
+}
+.cite-chip:hover{background:var(--accent-dim);border-color:var(--accent)}
+
+/* Msg actions */
+.msg-actions{display:flex;gap:4px;opacity:0;transition:opacity .15s}
+.msg-ai-wrap:hover .msg-actions{opacity:1}
+.msg-action-btn{
+  padding:3px 8px;border-radius:var(--radius-xs);border:1px solid var(--border);
+  background:transparent;color:var(--text-muted);font-size:.68rem;cursor:pointer;
+  transition:var(--transition);font-family:inherit;
+}
+.msg-action-btn:hover{color:var(--accent-bright);border-color:var(--accent);background:var(--accent-dim)}
+
+/* ── Chat input ─────────────────────────────────────────── */
+.chat-input-wrap{
+  margin-top:10px;
+  background:rgba(255,255,255,.03);
+  border:1px solid var(--border);
+  border-radius:var(--radius-sm);
+  transition:var(--transition);
+  flex-shrink:0;
+}
+.chat-input-wrap:focus-within{
+  border-color:var(--accent);
+  box-shadow:0 0 0 3px rgba(124,117,245,.1);
+}
+.chat-input-wrap textarea{
+  background:transparent;border:none;box-shadow:none;
+  resize:none;padding:11px 14px 5px;
+  min-height:44px;max-height:120px;
+  font-size:.84rem;line-height:1.6;overflow-y:auto;width:100%;
+}
+.chat-input-wrap textarea:focus{border:none;box-shadow:none;background:transparent}
+.chat-input-footer{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:5px 10px 8px;
+}
+
+/* reader now lives inside the left panel — no separate CSS needed */
+
+/* ── Notebook Guide panel ───────────────────────────────── */
+.guide-panel{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  display:flex;flex-direction:column;
+  overflow:hidden;
+  backdrop-filter:blur(12px);
+}
+.guide-header{
+  padding:12px 14px 10px;
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:8px;
+  flex-shrink:0;
+}
+.guide-header-title{
+  font-size:.85rem;font-weight:700;color:#fff;flex:1;letter-spacing:-.01em;
+}
+.guide-tabs{
+  display:flex;gap:1px;padding:8px 10px 0;flex-shrink:0;overflow-x:auto;
+}
+.guide-tab{
+  padding:6px 10px;border-radius:var(--radius-xs) var(--radius-xs) 0 0;
+  border:none;cursor:pointer;font-size:.72rem;font-weight:600;
+  font-family:inherit;color:var(--text-muted);background:transparent;
+  transition:var(--transition);white-space:nowrap;border-bottom:2px solid transparent;
+}
+.guide-tab:hover{color:var(--text)}
+.guide-tab.active{color:var(--accent-bright);border-bottom-color:var(--accent)}
+.guide-content{
+  flex:1;overflow-y:auto;padding:14px;
+  font-size:.82rem;line-height:1.7;
+}
+/* markdown in guide */
+.guide-content h1,.guide-content h2,.guide-content h3{color:#fff;font-weight:700;margin:.8em 0 .35em;font-size:.9em}
+.guide-content h1:first-child,.guide-content h2:first-child,.guide-content h3:first-child{margin-top:0}
+.guide-content p{color:var(--text-secondary);margin:0 0 .6em}
+.guide-content p:last-child{margin:0}
+.guide-content ul,.guide-content ol{padding-left:1.3em;margin:.25em 0 .6em;color:var(--text-secondary)}
+.guide-content li{margin:.2em 0}
+.guide-content strong{color:var(--text);font-weight:600}
+.guide-content em{color:var(--text-muted);font-style:italic}
+.guide-content blockquote{border-left:2px solid var(--accent);padding-left:10px;color:var(--text-muted);margin:.4em 0}
+.guide-content code{font-family:'JetBrains Mono',monospace;font-size:.78em;padding:1px 5px;background:rgba(124,117,245,.1);border-radius:4px;color:var(--accent-bright)}
+.guide-content hr{border:none;border-top:1px solid var(--border);margin:10px 0}
+.guide-empty{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  height:100%;text-align:center;padding:24px;gap:10px;
+}
+.guide-empty-icon{font-size:2rem;opacity:.35}
+.guide-empty-text{color:var(--text-muted);font-size:.8rem;line-height:1.6}
+.guide-generate-btn{
+  margin-top:8px;
+}
+
+/* Notes */
+.note-card{
+  padding:10px 12px;border-radius:var(--radius-xs);
+  border:1px solid var(--border);background:rgba(255,255,255,.02);
+  margin-bottom:6px;position:relative;cursor:pointer;
+  transition:var(--transition);
+}
+.note-card:hover{border-color:var(--border-light)}
+.note-card-text{font-size:.79rem;line-height:1.5;color:var(--text-secondary);white-space:pre-wrap;max-height:4.5em;overflow:hidden;transition:max-height .3s ease}
+.note-card.expanded .note-card-text{max-height:2000px}
+.note-card-meta{font-size:.65rem;color:var(--text-muted);margin-top:6px;display:flex;align-items:center;gap:6px}
+.note-delete{
+  position:absolute;top:8px;right:8px;
+  opacity:0;transition:opacity .15s;
+  background:transparent;border:none;cursor:pointer;
+  color:var(--text-muted);padding:2px;
+}
+.note-card:hover .note-delete{opacity:1}
+.note-delete:hover{color:var(--accent3)}
+
+/* no floating guide button needed — it lives in the topbar */
+
+/* ── Source multi-select ────────────────────────────────── */
+.src-sel-ring{
+  width:18px;height:18px;flex-shrink:0;
+  border:1.5px solid var(--border);
+  border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:.6rem;color:transparent;
+  transition:border-color .15s,background .15s,color .15s;
+  cursor:pointer;
+}
+.source-item:hover .src-sel-ring{border-color:rgba(0,201,160,.45)}
+.source-item.src-selected .src-sel-ring{
+  border-color:#00c9a0;background:rgba(0,201,160,.18);color:#00c9a0;
+}
+.source-item.src-selected{
+  border-color:rgba(0,201,160,.3)!important;
+  background:rgba(0,201,160,.04)!important;
+}
+
+/* ── Do More disabled / gate ────────────────────────────── */
+#do-more-btn-wrap.dm-disabled .do-more-btn{
+  opacity:.28;pointer-events:none;
+}
+#do-more-btn-wrap.dm-disabled .dm-label{opacity:.28}
+#do-more-gate{
+  display:flex;flex-direction:column;align-items:center;
+  gap:8px;padding:18px 16px 14px;text-align:center;
+}
+#do-more-gate svg{opacity:.35}
+#do-more-gate p{
+  font-size:.74rem;color:var(--text-muted);line-height:1.55;margin:0;
+}
+
+/* Active source indicator in Do More panel */
+#do-more-source-bar{
+  display:none;
+  align-items:center;gap:6px;
+  padding:5px 12px 0;flex-shrink:0;
+  font-size:.7rem;color:var(--text-muted);
+}
+#do-more-source-bar.visible{display:flex}
+.do-more-src-pill{
+  display:flex;align-items:center;gap:5px;
+  background:rgba(0,201,160,.1);border:1px solid rgba(0,201,160,.25);
+  border-radius:12px;padding:2px 8px;
+  color:#00c9a0;font-size:.7rem;font-weight:600;max-width:160px;
+}
+.do-more-src-pill span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.do-more-src-clear{
+  background:none;border:none;cursor:pointer;color:var(--text-muted);
+  font-size:.8rem;line-height:1;padding:0 0 0 2px;opacity:.7;
+}
+.do-more-src-clear:hover{color:#ff6090;opacity:1}
+
+/* ── Mind Map panel ─────────────────────────────────────── */
+#map-canvas{width:100%;flex:1;border-radius:var(--radius-xs);background:rgba(0,0,0,.2);min-height:0}
+.map-toolbar{display:flex;align-items:center;gap:6px;flex-shrink:0;margin-bottom:8px;flex-wrap:wrap}
+/* Do More action buttons */
+.do-more-btn{
+  display:flex;align-items:center;gap:9px;
+  width:100%;padding:10px 12px;
+  background:var(--surface-2);border:1px solid var(--border);
+  border-radius:var(--radius-xs);cursor:pointer;
+  font-size:.82rem;font-weight:500;color:var(--text);
+  text-align:left;transition:background .15s,border-color .15s;
+  line-height:1.3;
+}
+.do-more-btn:hover{background:rgba(124,117,245,.12);border-color:rgba(124,117,245,.35);color:#fff}
+
+/* ── Quiz panel ─────────────────────────────────────────── */
+.quiz-q{
+  background:rgba(124,117,245,.05);border:1px solid rgba(124,117,245,.12);
+  border-radius:var(--radius-sm);padding:14px;margin-bottom:10px;
+}
+.quiz-question{font-size:.84rem;font-weight:600;color:#fff;margin-bottom:10px;line-height:1.5}
+.quiz-option{
+  display:flex;align-items:flex-start;gap:8px;padding:7px 10px;
+  border-radius:var(--radius-xs);border:1px solid var(--border);
+  background:transparent;cursor:pointer;font-size:.78rem;color:var(--text-secondary);
+  font-family:inherit;text-align:left;width:100%;margin-bottom:4px;
+  transition:var(--transition);
+}
+.quiz-option:hover:not(:disabled){border-color:rgba(124,117,245,.3);background:rgba(124,117,245,.06);color:#fff}
+.quiz-option.correct{border-color:rgba(0,201,160,.4)!important;background:rgba(0,201,160,.08)!important;color:var(--accent2)!important}
+.quiz-option.wrong{border-color:rgba(255,96,144,.3)!important;background:rgba(255,96,144,.05)!important;color:var(--accent3)!important}
+.quiz-explanation{font-size:.74rem;color:var(--text-muted);margin-top:8px;padding:6px 10px;background:rgba(255,255,255,.03);border-radius:var(--radius-xs);display:none;line-height:1.6}
+.quiz-score{text-align:center;padding:20px;font-size:1.1rem;font-weight:700;color:#fff}
+
+/* ── Flashcards panel ───────────────────────────────────── */
+.flashcard-scene{perspective:1000px;width:100%;max-width:380px;margin:0 auto 14px;cursor:pointer}
+.flashcard-scene:hover .flashcard{box-shadow:0 8px 32px rgba(124,117,245,.18)}
+.flashcard{
+  width:100%;aspect-ratio:3/2;
+  position:relative;transform-style:preserve-3d;
+  transition:transform .5s cubic-bezier(.4,0,.2,1);
+  border-radius:var(--radius);
+}
+.flashcard.flipped{transform:rotateY(180deg)}
+.flashcard-face{
+  position:absolute;inset:0;backface-visibility:hidden;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:20px;border-radius:var(--radius);text-align:center;
+  border:1px solid rgba(124,117,245,.2);
+}
+.flashcard-front{background:linear-gradient(135deg,rgba(124,117,245,.12),rgba(0,201,160,.06));border-color:rgba(124,117,245,.25)}
+.flashcard-back{background:linear-gradient(135deg,rgba(0,201,160,.1),rgba(124,117,245,.08));transform:rotateY(180deg);border-color:rgba(0,201,160,.25)}
+.flashcard-label{font-size:.62rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;margin-bottom:10px;opacity:.5}
+.flashcard-text{font-size:.88rem;line-height:1.6;color:#fff;font-weight:500}
+.flashcard-source{font-size:.66rem;color:var(--text-muted);margin-top:10px;font-style:italic}
+.flashcard-nav{display:flex;align-items:center;justify-content:center;gap:12px;flex-shrink:0}
+.fc-counter{font-size:.78rem;color:var(--text-muted);min-width:52px;text-align:center}
+
+/* Tablet landscape — guide visible: use narrower columns */
+@media(max-width:1200px){
+  .workspace.guide-visible{grid-template-columns:240px 1fr 260px}
+}
+/* Tablet portrait — hide guide regardless */
+/* Tablet landscape */
+@media(max-width:1200px){
+  .workspace{grid-template-columns:260px 1fr 280px}
+}
+/* Tablet portrait — hide guide */
+@media(max-width:960px){
+  .workspace{grid-template-columns:220px 1fr!important;height:calc(100vh - 42px - 70px)}
+  #guide-pane{display:none!important}
+  #show-more-tab{display:none!important}
+  .left-panel-wrap,.ws-pane{font-size:.82rem}
+}
+/* Phablet */
+@media(max-width:768px){
+  .workspace{
+    grid-template-columns:1fr!important;
+    grid-template-rows:auto 1fr;
+    height:auto;gap:8px;
+  }
+  .ws-pane{height:auto;min-height:300px;max-height:60vmax}
+  #guide-pane{display:none!important}
+  .chat-area{max-height:50vmax}
+  .chat-input-wrap textarea{font-size:.84rem}
+  .tab-bar{flex-wrap:wrap;gap:3px}
+  .tab-btn{font-size:.7rem;padding:4px 8px}
+  .source-item{flex-wrap:wrap;gap:4px}
+}
+/* Mobile FAB — Do More button: mobile only (≤600px) */
+#mobile-do-more-fab{
+  display:none;
+  position:fixed;bottom:18px;left:50%;transform:translateX(-50%);
+  z-index:300;
+  padding:11px 22px;
+  background:linear-gradient(135deg,rgba(124,117,245,.95),rgba(0,201,160,.85));
+  color:#fff;font-size:.82rem;font-weight:700;letter-spacing:.03em;
+  border:none;border-radius:24px;cursor:pointer;
+  box-shadow:0 4px 18px rgba(124,117,245,.45);
+  align-items:center;gap:7px;
+  white-space:nowrap;
+}
+@media(max-width:600px){
+  #mobile-do-more-fab{display:flex}
+}
+/* Mobile bottom sheet */
+#mobile-do-more-sheet{
+  display:none;
+  position:fixed;inset:0;z-index:400;
+}
+#mobile-do-more-sheet.open{display:block}
+#mobile-do-more-backdrop{
+  position:absolute;inset:0;background:rgba(0,0,0,.55);
+}
+#mobile-do-more-drawer{
+  position:absolute;bottom:0;left:0;right:0;
+  background:var(--surface);
+  border-radius:18px 18px 0 0;
+  border-top:1px solid var(--border);
+  padding:0 0 env(safe-area-inset-bottom,0);
+  transform:translateY(100%);
+  transition:transform .28s cubic-bezier(.32,1,.4,1);
+  max-height:82vh;overflow-y:auto;
+}
+#mobile-do-more-sheet.open #mobile-do-more-drawer{
+  transform:translateY(0);
+}
+.mob-sheet-handle{
+  width:36px;height:4px;border-radius:2px;
+  background:var(--border-light);
+  margin:12px auto 0;
+}
+.mob-sheet-title{
+  font-size:.78rem;font-weight:700;color:var(--text-muted);
+  text-transform:uppercase;letter-spacing:.07em;
+  padding:14px 16px 6px;
+}
+.mob-sheet-grid{
+  display:grid;grid-template-columns:1fr 1fr;
+  gap:8px;padding:6px 14px 16px;
+}
+.mob-sheet-btn{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;
+  padding:14px 8px;
+  background:var(--surface-2);border:1px solid var(--border);
+  border-radius:var(--radius-xs);cursor:pointer;
+  font-size:.8rem;font-weight:600;color:var(--text);
+  text-align:center;line-height:1.3;
+  transition:background .15s,border-color .15s;
+  min-height:64px;
+}
+.mob-sheet-btn:hover,.mob-sheet-btn:active{
+  background:rgba(124,117,245,.15);border-color:rgba(124,117,245,.4);color:#fff;
+}
+.mob-sheet-btn span.icon{font-size:1.3rem}
+/* Mobile FAB bottom clearance — only needed when FAB is visible */
+@media(max-width:600px){
+  .workspace{padding-bottom:64px}
+}
+/* Mobile */
+@media(max-width:480px){
+  .workspace{gap:6px;padding:0 0 64px}
+  .ws-pane{max-height:70vmax}
+  .card{padding:10px}
+  .map-toolbar{flex-wrap:wrap}
+  .do-more-btn{padding:8px 10px;font-size:.78rem}
+  .chat-input-wrap .btn{padding:6px 10px;font-size:.78rem}
+}
+/* Floating "Show" tab on right edge */
+#show-more-tab{
+  position:fixed;right:0;top:50%;transform:translateY(-50%);
+  z-index:200;display:none;flex-direction:column;align-items:center;gap:6px;
+  padding:16px 8px;cursor:pointer;
+  background:var(--surface-2);
+  border:1px solid var(--border);border-right:none;
+  border-radius:10px 0 0 10px;
+  color:var(--text-muted);font-size:.68rem;font-weight:600;
+  letter-spacing:.05em;
+  box-shadow:-3px 0 16px rgba(0,0,0,.25);
+  transition:background .18s,color .18s,box-shadow .18s;
+  writing-mode:vertical-rl;text-orientation:mixed;
+}
+#show-more-tab:hover{
+  background:rgba(124,117,245,.18);color:#fff;
+  box-shadow:-4px 0 20px rgba(124,117,245,.25);
+}
+@media(max-width:960px){
+  #show-more-tab{display:none!important}
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- ── Header ─────────────────────────────────────────── -->
+<div class="flex items-center gap-3 animate-in" style="margin-bottom:12px;flex-shrink:0">
+  <div style="flex:1;min-width:0">
+    <div class="flex items-center gap-2 mb-1">
+      <a href="/" style="color:var(--text-muted);text-decoration:none;font-size:.76rem">Home</a>
+      <span style="color:var(--border-light);font-size:.76rem">/</span>
+      <span class="text-xs text-muted truncate">{{ notebook }}</span>
+    </div>
+    <h1 style="font-size:1.2rem;font-weight:800;letter-spacing:-.03em;margin:0" class="truncate">{{ notebook }}</h1>
+  </div>
+  <div class="flex items-center gap-2 flex-shrink-0">
+    <span class="badge badge-gray">{{ sources|length }} source{{ 's' if sources|length != 1 }}</span>
+  </div>
+</div>
+
+<div class="workspace animate-in-2" id="workspace">
+
+  <!-- ════════════ LEFT: Sources ════════════ -->
+  <div class="ws-pane">
+    <div class="card" style="flex:1;display:flex;flex-direction:column;overflow:hidden;padding:12px;gap:0">
+
+      <!-- ── In-panel file reader (replaces tabs when open) ── -->
+      <div id="left-reader" class="hidden" style="flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:0">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-shrink:0">
+          <button class="btn btn-ghost btn-sm btn-icon" onclick="closeReader()" title="Back to sources">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M15 18l-6-6 6-6"/></svg>
+          </button>
+          <span id="reader-icon" style="font-size:.9rem">📄</span>
+          <span id="reader-title" style="flex:1;font-weight:600;font-size:.8rem;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+          <span id="reader-format" class="badge badge-gray" style="font-size:.6rem;flex-shrink:0"></span>
+        </div>
+        <div id="reader-content" style="flex:1;overflow-y:auto;font-size:.76rem;line-height:1.7;color:var(--text-secondary);white-space:pre-wrap;font-family:'JetBrains Mono',monospace;min-height:0"></div>
+      </div>
+
+      <!-- ── Normal tabs (hidden when reader is open) ── -->
+      <div id="left-tabs-wrap" style="flex:1;display:flex;flex-direction:column;overflow:hidden;min-height:0">
+      <div class="tab-bar" style="margin-bottom:10px">
+        <button class="tab-btn active" onclick="showLeftTab('sources',this)">
+          Sources
+          {% if sources %}<span class="badge badge-accent" style="font-size:.58rem;padding:1px 5px;margin-left:3px">{{ sources|length }}</span>{% endif %}
+        </button>
+        <button class="tab-btn" onclick="showLeftTab('upload',this)">Upload</button>
+        <button class="tab-btn" onclick="showLeftTab('files',this)">
+          Files
+          {% if files %}<span class="badge badge-gray" style="font-size:.58rem;padding:1px 5px;margin-left:3px">{{ files|length }}</span>{% endif %}
+        </button>
+        <button class="tab-btn" onclick="showLeftTab('notes',this)" id="notes-tab-btn">
+          Notes
+          {% if notes %}<span class="badge badge-gray" style="font-size:.58rem;padding:1px 5px;margin-left:3px" id="notes-badge">{{ notes|length }}</span>{% endif %}
+          {% if not notes %}<span id="notes-badge" style="display:none"></span>{% endif %}
+        </button>
+      </div>
+
+      <!-- Sources tab -->
+      <div id="tab-sources" class="left-tab" style="flex:1;overflow-y:auto;min-height:0">
+        {% if sources %}
+          {% for s in sources %}
+          <div class="source-item" data-sid="{{ s.source_id }}" data-title="{{ s.title|e }}"
+               onclick="toggleSourceSelect(this.dataset.sid, this.dataset.title)">
+            <span class="src-sel-ring" title="Select for research scope">✓</span>
+            <span class="source-icon">
+              {% if s.type=='pdf' %}📄{% elif s.type=='youtube' %}▶️{% elif s.type=='url' %}🔗{% else %}📝{% endif %}
+            </span>
+            <div style="flex:1;min-width:0">
+              <div class="source-name truncate">{{ s.title[:38] }}{% if s.title|length > 38 %}…{% endif %}</div>
+              <div class="source-meta">{{ s.type }}{% if s.has_md %} · <span style="color:var(--accent2)">Docling ✓</span>{% endif %}</div>
+            </div>
+            <div class="source-actions">
+              {% if s.type=='pdf' %}
+              <button class="msg-action-btn" title="View original PDF text"
+                onclick="event.stopPropagation();readSource('{{ s.source_id }}','{{ s.title }}','pdf','pdf')">
+                PDF
+              </button>
+              {% endif %}
+              {% if s.has_md %}
+              <button class="msg-action-btn" title="View Docling markdown"
+                style="color:var(--accent2)"
+                onclick="event.stopPropagation();readSource('{{ s.source_id }}','{{ s.title }}','{{ s.type }}','md')">
+                MD
+              </button>
+              {% endif %}
+              <button class="msg-action-btn" title="Summarise this source"
+                onclick="event.stopPropagation();summariseSource('{{ s.source_id }}','{{ s.title }}')">
+                ∑
+              </button>
+              <button class="msg-action-btn" title="Delete this source"
+                style="color:var(--accent3)"
+                onclick="event.stopPropagation();deleteSource('{{ s.source_id }}','{{ s.title }}',this)">
+                ✕
+              </button>
+            </div>
+          </div>
+          {% endfor %}
+        {% else %}
+          <div class="empty-state" style="padding:28px">
+            <div class="empty-icon">📄</div>
+            <div class="empty-title">No sources yet</div>
+            <div class="empty-text">Go to the Upload tab to add PDFs, URLs, or YouTube.</div>
+          </div>
+        {% endif %}
+      </div>
+
+      <!-- Upload tab -->
+      <div id="tab-upload" class="left-tab hidden" style="overflow-y:auto;display:flex;flex-direction:column;gap:12px">
+        <div class="drop-zone" id="drop-zone" onclick="document.getElementById('pdf-input').click()">
+          <div style="font-size:1.5rem;margin-bottom:6px;opacity:.4">📄</div>
+          <div style="font-size:.8rem;font-weight:600;color:var(--text-secondary);margin-bottom:2px">Drop PDFs or click to browse</div>
+          <div class="text-xs text-muted">PDF, DOCX, TXT, MD</div>
+          <input type="file" id="pdf-input" multiple accept=".pdf,.docx,.txt,.md" style="display:none" onchange="uploadFiles(this.files)">
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <label style="font-size:.74rem;font-weight:600;color:var(--text-muted);letter-spacing:.03em;text-transform:uppercase">URLs &amp; YouTube Links</label>
+          <textarea id="urls-input" rows="3" placeholder="https://arxiv.org/abs/…&#10;https://youtube.com/watch?v=…" style="resize:none;font-size:.8rem"></textarea>
+          <button class="btn btn-primary btn-sm w-full" onclick="ingestUrls()">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+            Add Sources
+          </button>
+        </div>
+        <p id="ingest-status" class="text-xs text-muted" style="min-height:14px"></p>
+      </div>
+
+      <!-- Files tab -->
+      <div id="tab-files" class="left-tab hidden" style="overflow-y:auto">
+        {% if files %}{% for f in files %}{% if f.name != 'README.md' %}
+        <div class="source-item" id="file-row-{{ loop.index }}">
+          <span class="source-icon">📎</span>
+          <div style="flex:1;min-width:0">
+            <div class="source-name truncate">{{ f.name[:36] }}{% if f.name|length > 36 %}…{% endif %}</div>
+            <div class="source-meta">{{ f.modified }} · {{ (f.size/1024)|round(1) }} KB</div>
+          </div>
+          <div class="source-actions">
+            <button class="msg-action-btn" title="Delete file"
+              style="color:var(--accent3)"
+              onclick="event.stopPropagation();deleteFile('{{ f.name }}',this)">
+              ✕
+            </button>
+          </div>
+        </div>
+        {% endif %}{% endfor %}
+        {% else %}
+        <div class="empty-state" style="padding:24px"><div class="empty-text">No files uploaded yet</div></div>
+        {% endif %}
+      </div>
+
+      <!-- Notes tab -->
+      <div id="tab-notes" class="left-tab hidden" style="overflow:hidden;display:flex;flex-direction:column;gap:0;height:100%">
+        <div id="notes-list" style="flex:1;overflow-y:auto;min-height:0">
+          {% if notes %}
+            {% for note in notes %}
+            <div class="note-card" id="note-{{ note.id }}" onclick="toggleNote(this)">
+              <button class="note-delete" onclick="event.stopPropagation();deleteNote('{{ note.id }}')" title="Delete note">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>
+              </button>
+              <div class="note-card-text">{{ note.text }}</div>
+              <div class="note-card-meta">
+                <span class="badge badge-gray" style="font-size:.6rem;padding:1px 6px">{{ note.label }}</span>
+                <span>{{ note.ts }}</span>
+                {% if note.source %}<span>· {{ note.source[:25] }}</span>{% endif %}
+              </div>
+            </div>
+            {% endfor %}
+          {% else %}
+          <div class="empty-state" style="padding:28px">
+            <div class="empty-icon">📝</div>
+            <div class="empty-title">No notes yet</div>
+            <div class="empty-text">Save AI answers or write your own notes here.</div>
+          </div>
+          {% endif %}
+        </div>
+        <div style="padding-top:8px;border-top:1px solid var(--border);flex-shrink:0;display:flex;flex-direction:column;gap:6px">
+          <textarea id="manual-note" rows="2" placeholder="Write a note…" style="font-size:.79rem;resize:none"></textarea>
+          <button class="btn btn-ghost btn-sm w-full" onclick="saveManualNote()">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/></svg>
+            Save Note
+          </button>
+        </div>
+      </div>
+
+
+      </div><!-- /left-tabs-wrap -->
+    </div>
+  </div>
+
+  <!-- ════════════ CENTER: Chat ════════════ -->
+  <div class="ws-pane" style="gap:10px">
+    <!-- Chat -->
+    <div class="card" style="flex:1;display:flex;flex-direction:column;overflow:hidden;padding:12px;min-height:0">
+      <div class="flex items-center gap-2 mb-2 flex-shrink-0">
+        <span style="font-size:.86rem;font-weight:700;color:#fff;flex:1">Research Chat</span>
+        <span class="text-xs text-muted">Grounded in your sources</span>
+        <button class="btn btn-ghost btn-sm btn-icon" onclick="clearChat()" title="Clear chat" style="color:var(--text-muted)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
+        </button>
+      </div>
+
+      <div class="chat-area" id="chat-area" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:4px 0;min-height:0">
+        {% if not sources %}
+        <div class="msg-ai-wrap">
+          <div class="msg-ai">
+            👋 Add sources on the left, then ask me anything. I only answer from your documents — no hallucination.
+          </div>
+        </div>
+        {% endif %}
+        {% for turn in history %}
+        <div class="msg-wrap">
+          <div class="msg-user">{{ turn.q }}</div>
+          <div class="msg-ai-wrap">
+            <div class="msg-ai" data-raw="{{ turn.a | e }}"></div>
+            <div class="flex items-center gap-2">
+              <div class="msg-actions">
+                <button class="msg-action-btn" onclick="saveAsNote(this)" data-text="{{ turn.a | e }}" data-source="">📝 Save as Note</button>
+                <button class="msg-action-btn" onclick="copyText(this)" data-text="{{ turn.a | e }}">📋 Copy</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+
+      <div class="chat-input-wrap">
+        <textarea id="q-input" placeholder="Ask a research question about your sources…"
+          oninput="autoResize(this)"
+          onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat()}"></textarea>
+        <div class="chat-input-footer">
+          <span class="text-xs text-muted">Shift+Enter for new line</span>
+          <button class="btn btn-primary btn-sm" onclick="sendChat()" id="send-btn">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            Send
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════ RIGHT: Notebook Guide ════════════ -->
+  <div class="ws-pane" id="guide-pane">
+    <div class="guide-panel" style="flex:1;overflow:hidden;display:flex;flex-direction:column">
+      <div class="guide-header">
+        <span style="font-size:1rem">✨</span>
+        <span class="guide-header-title">Do More</span>
+        <button onclick="toggleGuide()" title="Hide panel"
+          style="margin-left:auto;display:flex;align-items:center;gap:5px;padding:4px 10px;background:rgba(255,255,255,.06);border:1px solid var(--border);border-radius:20px;color:var(--text-muted);cursor:pointer;font-size:.72rem;font-weight:500;transition:background .15s,color .15s,border-color .15s;white-space:nowrap"
+          onmouseover="this.style.background='rgba(124,117,245,.18)';this.style.color='#fff';this.style.borderColor='rgba(124,117,245,.4)'"
+          onmouseout="this.style.background='rgba(255,255,255,.06)';this.style.color='';this.style.borderColor=''">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+          Hide
+        </button>
+      </div>
+      <!-- ── Active source bar ── -->
+      <div id="do-more-source-bar">
+        <span>Scope:</span>
+        <div class="do-more-src-pill">
+          <span id="do-more-src-name">All sources</span>
+          <button class="do-more-src-clear" onclick="clearActiveSource()" title="Use all sources">✕</button>
+        </div>
+      </div>
+      <!-- ── Action buttons ── -->
+      <div id="do-more-btn-wrap" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:0" class="dm-disabled">
+        <!-- Gate: shown when no source selected -->
+        <div id="do-more-gate">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--text-muted)"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+          <p>Select at least one source<br>to activate Do More</p>
+        </div>
+        <!-- Buttons -->
+        <div style="padding:14px 12px;display:flex;flex-direction:column;gap:5px">
+          <div class="dm-label" style="font-size:.63rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px">AI in Chat</div>
+          <button class="do-more-btn" onclick="doMoreAction('briefing')">📋 Briefing</button>
+          <button class="do-more-btn" onclick="doMoreAction('themes')">🏷️ Key Themes</button>
+          <button class="do-more-btn" onclick="doMoreAction('faq')">❓ FAQ</button>
+          <button class="do-more-btn" onclick="doMoreAction('timeline')">📅 Timeline</button>
+          <div class="dm-label" style="font-size:.63rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.07em;margin:12px 0 6px">Study Tools</div>
+          <button class="do-more-btn" onclick="doMoreAction('mindmap')">🗺 Mind Map</button>
+          <button class="do-more-btn" onclick="doMoreAction('quiz')">❓ Quiz</button>
+          <button class="do-more-btn" onclick="doMoreAction('flashcards')">🃏 Flashcards</button>
+          <button class="do-more-btn" onclick="doMoreAction('kstats')">📊 Knowledge Stats</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /workspace -->
+
+<!-- unused panels hidden -->
+<div style="display:none">
+    <div>
+
+      <!-- Mind Map -->
+      <div id="tab-mindmap" class="study-tool" style="display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden">
+        <div class="map-toolbar">
+          <span style="font-size:.76rem;font-weight:600;color:var(--text-muted);flex:1">Knowledge Graph</span>
+          <button class="btn btn-ghost btn-sm" id="map-gen-btn" onclick="generateGraph()">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            Generate
+          </button>
+          <button class="btn btn-ghost btn-sm" onclick="generateGraph(true)" title="Regenerate">↺</button>
+        </div>
+        <div id="map-empty" style="display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;text-align:center;gap:10px;padding:24px">
+          <div style="font-size:2.5rem;opacity:.3">🗺</div>
+          <div class="text-xs text-muted" style="line-height:1.6">Click <strong>Generate</strong> to build an interactive<br>knowledge graph from your sources.</div>
+        </div>
+        <div id="map-canvas" style="display:none;flex:1;min-height:0;border-radius:var(--radius-xs)"></div>
+      </div>
+
+      <!-- Quiz -->
+      <div id="tab-quiz" class="study-tool" style="display:none;flex-direction:column;flex:1;min-height:0;overflow:hidden">
+        <div class="map-toolbar">
+          <span style="font-size:.76rem;font-weight:600;color:var(--text-muted);flex:1">Quiz</span>
+          <span id="quiz-score-badge" class="badge badge-accent" style="display:none"></span>
+          <button class="btn btn-ghost btn-sm" id="quiz-gen-btn" onclick="generateQuiz()">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            Generate
+          </button>
+          <button class="btn btn-ghost btn-sm" onclick="generateQuiz(true)" title="Regenerate">↺</button>
+        </div>
+        <div id="quiz-progress-wrap" style="display:none;padding:6px 10px 0;flex-shrink:0">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <span class="text-xs text-muted" id="quiz-progress-label">0 of 0 answered</span>
+            <span class="text-xs" style="color:var(--accent2)" id="quiz-correct-label">0 correct</span>
+          </div>
+          <div style="height:3px;background:var(--surface-2);border-radius:2px;overflow:hidden">
+            <div id="quiz-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--accent),var(--accent2));border-radius:2px;transition:width .3s ease"></div>
+          </div>
+        </div>
+        <div id="quiz-empty" style="display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;text-align:center;gap:10px;padding:24px">
+          <div style="font-size:2.5rem;opacity:.3">❓</div>
+          <div class="text-xs text-muted" style="line-height:1.6">Click <strong>Generate</strong> to create a quiz from your sources.</div>
+        </div>
+        <div id="quiz-container" class="hidden" style="flex:1;overflow-y:auto;min-height:0;padding:8px 12px 4px"></div>
+        <div id="quiz-results" class="hidden" style="padding:14px 12px;flex-shrink:0;border-top:1px solid var(--border);background:var(--surface)">
+          <div style="text-align:center;margin-bottom:10px">
+            <div id="quiz-results-emoji" style="font-size:1.8rem;margin-bottom:4px">🎉</div>
+            <div id="quiz-results-score" style="font-size:1.1rem;font-weight:800;color:#fff"></div>
+            <div id="quiz-results-msg" class="text-xs text-muted" style="margin-top:3px"></div>
+          </div>
+          <button class="btn btn-primary btn-sm" style="width:100%" onclick="generateQuiz(true)">New Quiz</button>
+        </div>
+      </div>
+
+      <!-- Flashcards -->
+      <div id="tab-flashcards" class="study-tool" style="display:none;flex-direction:column;flex:1;min-height:0;overflow:hidden">
+        <div class="map-toolbar">
+          <span style="font-size:.76rem;font-weight:600;color:var(--text-muted);flex:1">Flashcards</span>
+          <span id="fc-progress" class="text-xs text-muted"></span>
+          <button class="btn btn-ghost btn-sm" id="fc-gen-btn" onclick="generateFlashcards()">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            Generate
+          </button>
+          <button class="btn btn-ghost btn-sm" onclick="generateFlashcards(true)" title="Regenerate">↺</button>
+        </div>
+        <div id="fc-empty" style="display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;text-align:center;gap:10px;padding:24px">
+          <div style="font-size:2.5rem;opacity:.3">🃏</div>
+          <div class="text-xs text-muted" style="line-height:1.6">Click <strong>Generate</strong> to create flashcards from your sources.</div>
+        </div>
+        <div id="fc-deck" class="hidden" style="flex:1;display:flex;flex-direction:column;justify-content:center;padding:16px;min-height:0">
+          <div class="flashcard-scene" onclick="flipCard()">
+            <div class="flashcard" id="fc-card">
+              <div class="flashcard-face flashcard-front">
+                <div class="flashcard-label">Term / Question</div>
+                <div class="flashcard-text" id="fc-front-text"></div>
+              </div>
+              <div class="flashcard-face flashcard-back">
+                <div class="flashcard-label">Answer</div>
+                <div class="flashcard-text" id="fc-back-text"></div>
+                <div class="flashcard-source" id="fc-source-text"></div>
+              </div>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;margin-top:14px;max-width:400px;align-self:center;width:100%">
+            <button class="btn btn-sm" onclick="fcReview()"
+              style="flex:1;border:1px solid rgba(255,96,144,.35);color:#ff6090;background:rgba(255,96,144,.07);font-weight:600">
+              ↺ Review
+            </button>
+            <button class="btn btn-sm" onclick="fcKnow()"
+              style="flex:1;border:1px solid rgba(0,201,160,.35);color:#00c9a0;background:rgba(0,201,160,.07);font-weight:600">
+              ✓ Know it
+            </button>
+          </div>
+          <div class="flashcard-nav" style="margin-top:10px">
+            <button class="btn btn-ghost btn-sm btn-icon" onclick="fcPrev()" title="Previous">‹</button>
+            <span class="fc-counter" id="fc-counter">1 / 10</span>
+            <button class="btn btn-ghost btn-sm btn-icon" onclick="fcNext()" title="Next">›</button>
+          </div>
+          <div style="text-align:center;margin-top:6px">
+            <span class="text-xs text-muted" id="fc-mastery-label">Click card to flip</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Knowledge Stats -->
+      <div id="tab-kstats" class="study-tool" style="display:none;flex-direction:column;flex:1;min-height:0;overflow:hidden">
+        <div class="map-toolbar">
+          <span style="font-size:.76rem;font-weight:600;color:var(--text-muted);flex:1">Knowledge Summary</span>
+          <button class="btn btn-ghost btn-sm" id="ks-gen-btn" onclick="generateKStats()">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            Generate
+          </button>
+          <button class="btn btn-ghost btn-sm" onclick="generateKStats(true)" title="Regenerate">↺</button>
+        </div>
+        <div id="ks-empty" style="display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;text-align:center;gap:10px;padding:24px">
+          <div style="font-size:2.5rem;opacity:.3">📊</div>
+          <div class="text-xs text-muted" style="line-height:1.6">Click <strong>Generate</strong> to build a visual knowledge summary.</div>
+        </div>
+        <div id="ks-content" class="hidden" style="flex:1;overflow-y:auto;min-height:0;padding:16px 20px">
+          <div id="ks-summary" style="font-size:.82rem;color:var(--text-secondary);line-height:1.6;margin-bottom:16px;padding:12px 14px;background:rgba(124,117,245,.06);border:1px solid rgba(124,117,245,.12);border-radius:var(--radius-xs)"></div>
+          <div style="font-size:.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px">Key Concepts</div>
+          <div id="ks-bars" style="display:flex;flex-direction:column;gap:7px"></div>
+          <div style="font-size:.65rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 8px">Sources in this project</div>
+          <div id="ks-sources" style="display:flex;flex-direction:column;gap:4px"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div><!-- /hidden study panels -->
+
+<!-- Floating tab: visible only when Do More panel is hidden (desktop) -->
+<button id="show-more-tab" onclick="toggleGuide()" title="Show Do More panel">
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="transform:rotate(180deg)"><polyline points="15 18 9 12 15 6"/></svg>
+  ✨ Do More
+</button>
+
+<!-- Mobile FAB: always visible on small screens -->
+<button id="mobile-do-more-fab" onclick="openMobileDoMore()" aria-label="Do More">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+  ✨ Do More
+</button>
+
+<!-- Mobile bottom sheet -->
+<div id="mobile-do-more-sheet" role="dialog" aria-modal="true" aria-label="Do More">
+  <div id="mobile-do-more-backdrop" onclick="closeMobileDoMore()"></div>
+  <div id="mobile-do-more-drawer">
+    <div class="mob-sheet-handle"></div>
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px 0">
+      <span style="font-size:.85rem;font-weight:700;color:#fff">✨ Do More</span>
+      <div id="mob-sheet-src-pill" style="display:none;align-items:center;gap:4px;background:rgba(0,201,160,.1);border:1px solid rgba(0,201,160,.25);border-radius:12px;padding:2px 8px">
+        <span id="mob-sheet-src-name" style="font-size:.68rem;font-weight:600;color:#00c9a0;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+        <button onclick="clearActiveSource()" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:.8rem;padding:0 0 0 2px">✕</button>
+      </div>
+    </div>
+    <!-- Mobile gate message (shown when nothing selected) -->
+    <div id="mob-do-more-gate" style="display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 16px 8px;text-align:center">
+      <p style="font-size:.76rem;color:var(--text-muted);line-height:1.55;margin:0">
+        Select at least one source to activate Do More
+      </p>
+    </div>
+    <div id="mob-do-more-btns">
+    <div class="mob-sheet-title">AI in Chat</div>
+    <div class="mob-sheet-grid">
+      <button class="mob-sheet-btn" onclick="doMoreAction('briefing');closeMobileDoMore()"><span class="icon">📋</span>Briefing</button>
+      <button class="mob-sheet-btn" onclick="doMoreAction('themes');closeMobileDoMore()"><span class="icon">🏷️</span>Key Themes</button>
+      <button class="mob-sheet-btn" onclick="doMoreAction('faq');closeMobileDoMore()"><span class="icon">❓</span>FAQ</button>
+      <button class="mob-sheet-btn" onclick="doMoreAction('timeline');closeMobileDoMore()"><span class="icon">📅</span>Timeline</button>
+    </div>
+    <div class="mob-sheet-title" style="padding-top:2px">Study Tools</div>
+    <div class="mob-sheet-grid">
+      <button class="mob-sheet-btn" onclick="doMoreAction('mindmap');closeMobileDoMore()"><span class="icon">🗺</span>Mind Map</button>
+      <button class="mob-sheet-btn" onclick="doMoreAction('quiz');closeMobileDoMore()"><span class="icon">❓</span>Quiz</button>
+      <button class="mob-sheet-btn" onclick="doMoreAction('flashcards');closeMobileDoMore()"><span class="icon">🃏</span>Flashcards</button>
+      <button class="mob-sheet-btn" onclick="doMoreAction('kstats');closeMobileDoMore()"><span class="icon">📊</span>Knowledge Stats</button>
+    </div>
+    </div><!-- /mob-do-more-btns -->
+    <div style="padding:0 14px 12px">
+      <button onclick="closeMobileDoMore()" style="width:100%;padding:10px;border-radius:var(--radius-xs);border:1px solid var(--border);background:var(--surface-2);color:var(--text-muted);font-size:.82rem;cursor:pointer">
+        Cancel
+      </button>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+const NOTEBOOK = "{{ notebook }}";
+let currentGuideType = 'briefing';
+let currentGuideContent = '';
+let notesCount = {{ notes|length }};
+let guideVisible = false;
+
+// Render existing history (markdown)
+document.querySelectorAll('.msg-ai[data-raw]').forEach(el=>{
+  el.innerHTML = renderMarkdown(el.dataset.raw);
+});
+
+// Auto-scroll chat
+const chatArea = document.getElementById('chat-area');
+chatArea.scrollTop = chatArea.scrollHeight;
+
+// ── Utilities ──────────────────────────────────────────────
+function autoResize(el){
+  el.style.height='auto';
+  el.style.height=Math.min(el.scrollHeight,120)+'px';
+}
+
+function updateNotesCount(delta){
+  notesCount += delta;
+  let badge = document.getElementById('notes-badge');
+  if(!badge){
+    badge = document.createElement('span');
+    badge.id = 'notes-badge';
+    badge.className = 'badge badge-gray';
+    badge.style.cssText = 'font-size:.58rem;padding:1px 5px;margin-left:3px';
+    document.getElementById('notes-tab-btn').appendChild(badge);
+  }
+  if(notesCount > 0){
+    badge.textContent = notesCount;
+    badge.style.display = '';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+// ── Toggle Guide panel ─────────────────────────────────────
+function toggleGuide(){
+  const ws   = document.getElementById('workspace');
+  const pane = document.getElementById('guide-pane');
+  const tab  = document.getElementById('show-more-tab');
+  const lbl  = document.getElementById('guide-toggle-label');
+  guideVisible = !guideVisible;
+  if(guideVisible){
+    pane.style.display = '';
+    ws.classList.add('guide-visible');
+    if(tab) tab.style.display = 'none';
+    if(lbl) lbl.textContent = 'Hide More';
+  } else {
+    pane.style.display = 'none';
+    ws.classList.remove('guide-visible');
+    if(tab) tab.style.display = 'flex';
+    if(lbl) lbl.textContent = 'Show More';
+  }
+}
+(function(){
+  // Collapse the navigation sidebar on desktop
+  if(!_isMobile()){
+    document.querySelector('.sidebar')?.classList.add('collapsed');
+    document.getElementById('topbar-menu-btn')?.classList.add('active');
+    _sidebarOpen = false;
+  }
+  // Show the Do More panel by default
+  const ws = document.getElementById('workspace');
+  ws?.classList.add('guide-visible');
+  guideVisible = true;
+  const lbl = document.getElementById('guide-toggle-label');
+  if(lbl) lbl.textContent = 'Hide More';
+  const tab = document.getElementById('show-more-tab');
+  if(tab) tab.style.display = 'none';
+})();
+
+// ── Tab switching ──────────────────────────────────────────
+function showLeftTab(tab, btn){
+  document.querySelectorAll('#left-tabs-wrap .left-tab').forEach(t=>t.classList.add('hidden'));
+  document.getElementById('tab-'+tab).classList.remove('hidden');
+  document.querySelectorAll('#left-tabs-wrap .tab-btn').forEach(b=>b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+}
+
+// ── Do More action buttons — all send to Research Chat ─────
+const _DO_MORE_PROMPTS = {
+  briefing:   'Create a comprehensive briefing document from my notebook sources. Structure it with: **Executive Summary** (3-4 sentences), **Key Findings** (bullet points), **Main Arguments** (numbered), and **Conclusions**.',
+  themes:     'Identify and explain the key themes across all my notebook sources. For each theme write: theme name in bold, a 2-sentence explanation, and which sources it appears in.',
+  faq:        'Generate a FAQ based on my notebook sources. Write at least 8 questions a reader would ask, each followed by a clear, detailed answer grounded in the sources.',
+  timeline:   'Create a chronological timeline of events, dates, or key developments from my notebook sources. Format each entry as: **[Date/Period]** — [What happened and why it matters].',
+  mindmap:    'Create a structured text mind map of my notebook sources. Use this format:\n\n🎯 **Central Topic: [main subject]**\n├── 📌 **Branch 1: [topic]**\n│   ├── [subtopic]\n│   └── [subtopic]\n├── 📌 **Branch 2: [topic]**\n│   ├── [subtopic]\n│   └── [subtopic]\n└── 📌 **Branch 3: [topic]**\n    └── [subtopic]\n\nInclude at least 4 main branches with subtopics.',
+  quiz:       'Create a 10-question multiple-choice quiz from my notebook sources. Format exactly like this:\n\n**Q1.** [Question text]?\n   A) [option]\n   B) [option]\n   C) [option]\n   D) [option]\n   ✅ **Answer: [letter]) [correct option]**\n   💡 *[Brief explanation from sources]*\n\nRepeat for all 10 questions. Make questions test real understanding, not just memory.',
+  flashcards: 'Generate 12 study flashcards from my notebook sources. Format each card exactly like this:\n\n---\n**Card [N] of 12**\n📌 **Term:** [term or question]\n📝 **Definition:** [clear, complete definition or answer]\n🔗 *Source: [source title]*\n\nCover the most important concepts from the sources.',
+  kstats:     'Analyse my notebook sources and produce a Knowledge Summary. Include:\n1. **Overview** — 2-sentence summary of the whole notebook\n2. **Top Concepts** — list 8-10 key concepts, each with: name, importance score (1-10), and one-sentence explanation\n3. **Knowledge Gaps** — what topics could be explored further\n4. **Sources Overview** — one line per source describing its contribution',
+};
+
+function doMoreAction(type){
+  if(selectedSourceIds.size === 0){
+    showToast('Select at least one source first','info');
+    return;
+  }
+  const prompt = _DO_MORE_PROMPTS[type];
+  if(!prompt) return;
+  const input = document.getElementById('q-input');
+  if(input){
+    input.value = prompt;
+    if(typeof autoResize==='function') autoResize(input);
+    sendChat();
+  }
+}
+
+function openMobileDoMore(){
+  const sheet = document.getElementById('mobile-do-more-sheet');
+  if(!sheet) return;
+  // Always open — gate message inside explains when disabled
+  sheet.style.display = 'block';
+  requestAnimationFrame(()=>{ sheet.classList.add('open'); });
+  document.body.style.overflow = 'hidden';
+}
+function closeMobileDoMore(){
+  const sheet = document.getElementById('mobile-do-more-sheet');
+  if(!sheet) return;
+  sheet.classList.remove('open');
+  document.body.style.overflow = '';
+  setTimeout(()=>{ if(!sheet.classList.contains('open')) sheet.style.display = 'none'; }, 300);
+}
+
+// ── Notebook Guide generation ──────────────────────────────
+async function generateGuide(){
+  const btn = document.getElementById('guide-gen-btn');
+  const content = document.getElementById('guide-content');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Generating…';
+  content.innerHTML = `<div style="display:flex;align-items:center;gap:8px;padding:20px;color:var(--text-muted);font-size:.82rem"><span class="spinner"></span> Analysing your sources…</div>`;
+
+  try{
+    const resp = await fetch(`/api/guide/${encodeURIComponent(NOTEBOOK)}/${currentGuideType}`, {method:'POST'});
+    const data = await resp.json();
+    if(data.ok){
+      currentGuideContent = data.content;
+      content.innerHTML = `<div class="guide-md">${renderMarkdown(data.content)}</div>`;
+      // Apply markdown styles
+      content.querySelectorAll('h1,h2,h3').forEach(h=>{h.style.color='#fff';h.style.fontWeight='700';h.style.margin='.7em 0 .3em';h.style.fontSize='.9em'});
+      showToast('Guide generated!','success','✓');
+    } else {
+      content.innerHTML = `<div style="padding:16px;color:var(--accent3);font-size:.82rem">Error: ${data.error}</div>`;
+    }
+  } catch(e){
+    content.innerHTML = `<div style="padding:16px;color:var(--accent3);font-size:.82rem">Network error</div>`;
+  }
+  btn.disabled = false;
+  btn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> Generate';
+}
+
+function saveGuideAsNote(){
+  if(!currentGuideContent){showToast('Generate content first','info');return}
+  const labels = {briefing:'Briefing',key_themes:'Key Themes',faq:'FAQ',study_guide:'Study Guide',timeline:'Timeline'};
+  addNote(currentGuideContent, labels[currentGuideType]||currentGuideType, 'Notebook Guide');
+}
+
+// ── Multi-source selection ─────────────────────────────────
+const selectedSourceIds   = new Set();
+const selectedSourceNames = {};  // id → name
+
+function toggleSourceSelect(id, name){
+  if(selectedSourceIds.has(id)){
+    selectedSourceIds.delete(id);
+    delete selectedSourceNames[id];
+  } else {
+    selectedSourceIds.add(id);
+    selectedSourceNames[id] = name;
+  }
+  const item = document.querySelector(`.source-item[data-sid="${CSS.escape(id)}"]`);
+  if(item) item.classList.toggle('src-selected', selectedSourceIds.has(id));
+  updateDoMoreState();
+}
+
+function clearAllSourceSelections(){
+  selectedSourceIds.clear();
+  Object.keys(selectedSourceNames).forEach(k=>delete selectedSourceNames[k]);
+  document.querySelectorAll('.source-item.src-selected').forEach(el=>el.classList.remove('src-selected'));
+  updateDoMoreState();
+}
+
+// Kept for backwards compat (called from close-reader, mobile clear btn)
+function clearActiveSource(){ clearAllSourceSelections(); }
+
+function updateDoMoreState(){
+  const count = selectedSourceIds.size;
+  const active = count > 0;
+
+  // Desktop Do More panel — source scope bar
+  const bar  = document.getElementById('do-more-source-bar');
+  const lbl  = document.getElementById('do-more-src-name');
+  if(bar){
+    if(active){
+      bar.classList.add('visible');
+      const names = Object.values(selectedSourceNames);
+      const label = count === 1
+        ? (names[0].length > 22 ? names[0].slice(0,22)+'…' : names[0])
+        : `${count} sources selected`;
+      if(lbl) lbl.textContent = label;
+    } else {
+      bar.classList.remove('visible');
+    }
+  }
+
+  // Desktop Do More — gate / button disabled state
+  const wrap = document.getElementById('do-more-btn-wrap');
+  const gate = document.getElementById('do-more-gate');
+  if(wrap) wrap.classList.toggle('dm-disabled', !active);
+  if(gate) gate.style.display = active ? 'none' : 'flex';
+
+  // Mobile sheet gate
+  const mobGate = document.getElementById('mob-do-more-gate');
+  const mobBtns = document.getElementById('mob-do-more-btns');
+  if(mobGate) mobGate.style.display = active ? 'none' : 'flex';
+  if(mobBtns) mobBtns.style.opacity = active ? '1' : '0.35';
+  if(mobBtns) mobBtns.style.pointerEvents = active ? '' : 'none';
+
+  // Mobile sheet source pill
+  const mob  = document.getElementById('mob-sheet-src-pill');
+  const mlbl = document.getElementById('mob-sheet-src-name');
+  if(mob){ mob.style.display = active ? 'flex' : 'none'; }
+  if(mlbl && active){
+    const names = Object.values(selectedSourceNames);
+    mlbl.textContent = count===1
+      ? (names[0].length>14 ? names[0].slice(0,14)+'…' : names[0])
+      : `${count} sources`;
+  }
+
+  // Mobile FAB — dim when nothing selected
+  const fab = document.getElementById('mobile-do-more-fab');
+  if(fab){ fab.style.opacity = active ? '1' : '0.5'; fab.title = active ? 'Do More' : 'Select a source first'; }
+}
+
+// ── Source reader ──────────────────────────────────────────
+async function readSource(sourceId, title, type, viewMode){
+  // Show reader inside left panel — tabs swap out, chat unaffected
+  document.getElementById('left-tabs-wrap').classList.add('hidden');
+  const leftReader = document.getElementById('left-reader');
+  leftReader.classList.remove('hidden');
+
+  document.getElementById('reader-title').textContent = title;
+  document.getElementById('reader-format').textContent = 'Loading…';
+  document.getElementById('reader-format').className = 'badge badge-gray';
+  document.getElementById('reader-content').textContent = 'Loading…';
+  document.getElementById('reader-icon').textContent = viewMode==='md' ? '📋' : ({pdf:'📄',url:'🔗',youtube:'▶️'}[type]||'📝');
+
+  document.querySelectorAll('.source-item').forEach(s=>s.classList.remove('active'));
+  document.querySelector(`[data-sid="${sourceId}"]`)?.classList.add('active');
+  // Auto-select for research scope when opening a source
+  if(!selectedSourceIds.has(sourceId)) toggleSourceSelect(sourceId, title);
+
+  const url = `/api/source/${encodeURIComponent(NOTEBOOK)}/${sourceId}/read` + (viewMode ? `?mode=${viewMode}` : '');
+  try{
+    const d = await fetch(url).then(r=>r.json());
+    const content = document.getElementById('reader-content');
+    if(d.ok){
+      content.textContent = d.content;
+      const fmt = d.format==='markdown' ? 'Docling MD' : d.format==='chunks' ? 'Indexed' : 'PDF Text';
+      document.getElementById('reader-format').textContent = fmt;
+      document.getElementById('reader-format').className = 'badge '+(d.format==='markdown'?'badge-green':'badge-accent');
+    } else {
+      content.textContent = 'Error: '+d.error;
+    }
+  } catch(e){ document.getElementById('reader-content').textContent = 'Failed to load'; }
+}
+
+function closeReader(){
+  document.getElementById('left-reader').classList.add('hidden');
+  document.getElementById('left-tabs-wrap').classList.remove('hidden');
+  document.querySelectorAll('.source-item').forEach(s=>s.classList.remove('active'));
+  // Note: closing the reader does NOT deselect — sources stay in scope
+}
+
+async function summariseSource(sourceId, title){
+  showToast(`Summarising: ${title.slice(0,30)}…`, 'info');
+  const wrapDiv = document.createElement('div');
+  wrapDiv.className = 'msg-wrap';
+  wrapDiv.innerHTML = `
+    <div class="msg-user">Summarise source: ${escapeHtml(title)}</div>
+    <div class="msg-ai-wrap">
+      <div class="msg-ai"><span class="spinner"></span> Summarising…</div>
+    </div>`;
+  chatArea.appendChild(wrapDiv);
+  chatArea.scrollTop = chatArea.scrollHeight;
+  showLeftTab('sources', document.querySelector('.tab-btn'));
+
+  try{
+    const d = await fetch(`/api/source/${encodeURIComponent(NOTEBOOK)}/${sourceId}/summary`, {method:'POST'}).then(r=>r.json());
+    const msgEl = wrapDiv.querySelector('.msg-ai');
+    if(d.ok){
+      msgEl.innerHTML = renderMarkdown(d.summary);
+      addMsgActions(wrapDiv.querySelector('.msg-ai-wrap'), d.summary, title);
+    } else {
+      msgEl.textContent = 'Error: '+d.error;
+    }
+  } catch(e){ wrapDiv.querySelector('.msg-ai').textContent = 'Failed'; }
+  chatArea.scrollTop = chatArea.scrollHeight;
+}
+
+// ── Delete source (ChromaDB + file) ────────────────────────
+async function deleteSource(sourceId, title, btn){
+  showModal(
+    'Remove Source',
+    `Remove <strong style="color:#fff">${title}</strong> from this notebook?<br>
+     <span style="font-size:.8rem;color:var(--text-muted)">This removes it from the AI index and deletes the file.</span>`,
+    [
+      {label:'Cancel', class:'btn-ghost'},
+      {label:'Remove', class:'btn-danger', onclick: async ()=>{
+        try{
+          const d = await fetch(`/api/source/${encodeURIComponent(NOTEBOOK)}/${sourceId}`, {method:'DELETE'}).then(r=>r.json());
+          if(d.ok){
+            btn.closest('.source-item')?.remove();
+            showToast(`Removed: ${title.slice(0,30)}`, 'success', '✓');
+            setTimeout(()=>location.reload(), 800);
+          } else {
+            showToast(d.error||'Delete failed', 'error', '✗');
+          }
+        } catch(e){ showToast('Delete failed', 'error', '✗'); }
+      }}
+    ]
+  );
+}
+
+// ── Delete file from disk ───────────────────────────────────
+async function deleteFile(filename, btn){
+  showModal(
+    'Delete File',
+    `Delete <strong style="color:#fff">${filename}</strong> from disk?<br>
+     <span style="font-size:.8rem;color:var(--text-muted)">If already indexed, use Sources tab to also remove from AI index.</span>`,
+    [
+      {label:'Cancel', class:'btn-ghost'},
+      {label:'Delete', class:'btn-danger', onclick: async ()=>{
+        try{
+          const d = await fetch(`/api/file/${encodeURIComponent(NOTEBOOK)}/${encodeURIComponent(filename)}`, {method:'DELETE'}).then(r=>r.json());
+          if(d.ok){
+            btn.closest('.source-item')?.remove();
+            showToast(`Deleted: ${filename}`, 'success', '✓');
+          } else {
+            showToast(d.error||'Delete failed', 'error', '✗');
+          }
+        } catch(e){ showToast('Delete failed', 'error', '✗'); }
+      }}
+    ]
+  );
+}
+
+// ── Chat ───────────────────────────────────────────────────
+function addMsgActions(wrapEl, text, source=''){
+  const actDiv = document.createElement('div');
+  actDiv.className = 'flex items-center gap-2';
+  actDiv.innerHTML = `
+    <div class="msg-actions">
+      <button class="msg-action-btn" onclick="saveAsNote(this)" data-text="${text.replace(/"/g,'&quot;')}" data-source="${source}">📝 Save as Note</button>
+      <button class="msg-action-btn" onclick="copyText(this)" data-text="${text.replace(/"/g,'&quot;')}">📋 Copy</button>
+    </div>`;
+  wrapEl.appendChild(actDiv);
+}
+
+function appendUserMsg(text){
+  const wrap = document.createElement('div');
+  wrap.className = 'msg-wrap';
+  wrap.innerHTML = `<div class="msg-user">${text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>`;
+  chatArea.appendChild(wrap);
+  chatArea.scrollTop = chatArea.scrollHeight;
+  return wrap;
+}
+
+function appendAiMsg(){
+  const aiWrap = document.createElement('div');
+  aiWrap.className = 'msg-ai-wrap';
+  const aiDiv = document.createElement('div');
+  aiDiv.className = 'msg-ai';
+  aiDiv.innerHTML = '<span class="spinner"></span>';
+  aiWrap.appendChild(aiDiv);
+  const wrap = document.createElement('div');
+  wrap.className = 'msg-wrap';
+  wrap.appendChild(aiWrap);
+  chatArea.appendChild(wrap);
+  chatArea.scrollTop = chatArea.scrollHeight;
+  return {wrap, aiDiv, aiWrap};
+}
+
+// ── Keyword → Do More interceptor ──────────────────────────
+const _KEYWORD_MAP = [
+  {type:'briefing',    words:['briefing','brief','overview','summarize','summarise','summary']},
+  {type:'themes',      words:['themes','key themes','theme','main ideas','main topics','topics']},
+  {type:'faq',         words:['faq','frequently asked','questions and answers','q&a','q and a']},
+  {type:'timeline',    words:['timeline','chronology','chronological','time line','dates','sequence of events']},
+  {type:'mindmap',     words:['mind map','mindmap','mind-map','concept map','knowledge map','map']},
+  {type:'quiz',        words:['quiz','test me','test','multiple choice','mcq','questions']},
+  {type:'flashcards',  words:['flashcard','flashcards','flash card','flash cards','cards','study cards']},
+  {type:'kstats',      words:['knowledge stats','stats','statistics','knowledge summary','knowledge gaps','gaps','concepts']},
+];
+
+function _matchDoMoreKeyword(text){
+  const t = text.toLowerCase().trim();
+  const wordCount = t.split(/\s+/).filter(Boolean).length;
+  if(wordCount > 7) return null;
+  for(const {type, words} of _KEYWORD_MAP){
+    for(const w of words){
+      if(t === w || t.startsWith(w+' ') || t.endsWith(' '+w) || t.includes(' '+w+' ')){
+        return type;
+      }
+    }
+  }
+  return null;
+}
+
+async function sendChat(){
+  const inp = document.getElementById('q-input');
+  let q = inp.value.trim(); if(!q) return;
+  const displayQ = q;  // what we show in the chat bubble
+
+  // Keyword expansion: short trigger → full Do More prompt
+  const kwType = _matchDoMoreKeyword(q);
+  if(kwType && _DO_MORE_PROMPTS[kwType]){
+    q = _DO_MORE_PROMPTS[kwType];
+  }
+
+  inp.value=''; inp.style.height='auto';
+  const btn = document.getElementById('send-btn'); btn.disabled=true;
+
+  // Show what user typed; prefix scope indicator when sources are selected
+  const scopeCount = selectedSourceIds.size;
+  const scopeLabel = scopeCount === 1
+    ? `[${Object.values(selectedSourceNames)[0]}]`
+    : scopeCount > 1 ? `[${scopeCount} sources]` : '';
+  const chatLabel = scopeLabel ? `${scopeLabel}  ${displayQ}` : displayQ;
+  appendUserMsg(chatLabel);
+  const {wrap, aiDiv, aiWrap} = appendAiMsg();
+
+  try{
+    const payload = {notebook:NOTEBOOK, question:q};
+    if(selectedSourceIds.size > 0) payload.source_ids = Array.from(selectedSourceIds);
+    const d = await fetch('/api/chat',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    }).then(r=>r.json());
+
+    if(d.ok){
+      aiDiv.innerHTML = renderMarkdown(d.answer);
+      // Citations
+      if(d.sources && d.sources.length > 0){
+        const citeDiv = document.createElement('div');
+        citeDiv.className = 'citations';
+        d.sources.forEach(s=>{
+          const chip = document.createElement('span');
+          chip.className = 'cite-chip';
+          const icons = {pdf:'📄',url:'🔗',youtube:'▶️'};
+          chip.innerHTML = `${icons[s.type]||'📝'} ${s.title.slice(0,30)}${s.title.length>30?'…':''}`;
+          chip.title = s.title;
+          chip.onclick = () => readSource(s.source_id, s.title, s.type);
+          citeDiv.appendChild(chip);
+        });
+        aiWrap.insertBefore(citeDiv, aiWrap.querySelector('.flex') || null);
+        aiWrap.appendChild(citeDiv);
+      }
+      addMsgActions(aiWrap, d.answer);
+    } else {
+      aiDiv.textContent = 'Error: '+(d.error||'Unknown error');
+    }
+  } catch(e){
+    aiDiv.textContent = 'Network error';
+  }
+  btn.disabled=false;
+  chatArea.scrollTop = chatArea.scrollHeight;
+  inp.focus();
+}
+
+async function clearChat(){
+  showModal('Clear Chat History','Remove all messages for this project? This cannot be undone.',[
+    {label:'Cancel',class:'btn-ghost'},
+    {label:'Clear',class:'btn-danger',onclick:async()=>{
+      await fetch('/api/chat/'+encodeURIComponent(NOTEBOOK)+'/clear',{method:'POST'});
+      chatArea.innerHTML='<div class="msg-ai-wrap"><div class="msg-ai">Chat cleared. Ask a new question.</div></div>';
+      showToast('Chat cleared','info');
+    }}
+  ]);
+}
+
+async function summarise(){
+  const {wrap, aiDiv, aiWrap} = appendAiMsg();
+  try{
+    const d = await fetch('/api/summarise',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({notebook:NOTEBOOK})}).then(r=>r.json());
+    aiDiv.innerHTML = d.ok ? renderMarkdown(d.answer) : ('Error: '+d.error);
+    if(d.ok) addMsgActions(aiWrap, d.answer);
+  } catch(e){ aiDiv.textContent='Network error'; }
+  chatArea.scrollTop = chatArea.scrollHeight;
+}
+
+async function saveSession(){
+  try{
+    const d = await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({notebook:NOTEBOOK})}).then(r=>r.json());
+    if(d.ok){showToast('Session saved!','success','✓');document.getElementById('save-msg').textContent='Saved to exports.';}
+    else showToast(d.error||'Save failed','error','✗');
+  } catch(e){ showToast('Save failed','error','✗'); }
+}
+
+// ── Notes ──────────────────────────────────────────────────
+function saveAsNote(btn){
+  const text = btn.dataset.text || '';
+  const source = btn.dataset.source || '';
+  if(text) addNote(text, 'answer', source);
+}
+
+function copyText(btn){
+  const text = btn.dataset.text || '';
+  navigator.clipboard.writeText(text).then(()=>showToast('Copied!','success','✓'));
+}
+
+function saveManualNote(){
+  const ta = document.getElementById('manual-note');
+  const text = ta.value.trim();
+  if(!text) return;
+  addNote(text, 'note', '');
+  ta.value = '';
+}
+
+async function addNote(text, label, source){
+  try{
+    const d = await fetch(`/api/notes/${encodeURIComponent(NOTEBOOK)}`,{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({text, label, source})
+    }).then(r=>r.json());
+    if(d.ok){
+      showToast('Note saved!','success','📝');
+      updateNotesCount(1);
+      // Add to DOM
+      const list = document.getElementById('notes-list');
+      const emptyEl = list.querySelector('.empty-state');
+      if(emptyEl) emptyEl.remove();
+      const n = d.note;
+      const noteEl = document.createElement('div');
+      noteEl.className='note-card';noteEl.id='note-'+n.id;
+      noteEl.onclick=function(){toggleNote(this)};
+      noteEl.innerHTML=`
+        <button class="note-delete" onclick="event.stopPropagation();deleteNote('${n.id}')" title="Delete">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+        <div class="note-card-text">${text.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>
+        <div class="note-card-meta">
+          <span class="badge badge-gray" style="font-size:.6rem;padding:1px 6px">${label}</span>
+          <span>${n.ts}</span>${source?`<span>· ${source.slice(0,25)}</span>`:''}
+        </div>`;
+      list.insertBefore(noteEl, list.firstChild);
+    }
+  } catch(e){ showToast('Failed to save note','error','✗'); }
+}
+
+function toggleNote(card){card.classList.toggle('expanded')}
+
+async function deleteNote(noteId){
+  try{
+    await fetch(`/api/notes/${encodeURIComponent(NOTEBOOK)}/${noteId}`,{method:'DELETE'});
+    document.getElementById('note-'+noteId)?.remove();
+    updateNotesCount(-1);
+    showToast('Note deleted','info');
+  } catch(e){ showToast('Failed to delete','error','✗'); }
+}
+
+// ── Upload ─────────────────────────────────────────────────
+const dz = document.getElementById('drop-zone');
+if(dz){
+  dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag-over')});
+  dz.addEventListener('dragleave',()=>dz.classList.remove('drag-over'));
+  dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag-over');uploadFiles(e.dataTransfer.files)});
+}
+
+async function uploadFiles(files){
+  if(!files.length) return;
+  const st = document.getElementById('ingest-status');
+  st.innerHTML='<span class="spinner"></span> Processing…';
+  const fd = new FormData(); fd.append('notebook',NOTEBOOK);
+  for(const f of files) fd.append('pdfs',f);
+  try{
+    const resp = await fetch('/api/ingest',{method:'POST',body:fd});
+    if(!resp.ok){ st.textContent=`Server error (${resp.status})`; showToast('Upload failed','error','✗'); return; }
+    const d = await resp.json();
+    const ok = (d.results||[]).filter(x=>x.ok).map(x=>x.title||x.file).join(', ');
+    const fail = (d.results||[]).filter(x=>!x.ok).map(x=>x.error||x.file).join('; ');
+    if(d.ingested > 0){
+      st.textContent = `✓ ${d.ingested} source(s) added — ${ok}`;
+      showToast(`${d.ingested} source(s) ingested!`,'success','✓');
+      setTimeout(()=>location.reload(),1200);
+    } else {
+      st.textContent = fail ? `Failed: ${fail}` : 'No sources added';
+      showToast(fail||'No sources added','error','✗');
+    }
+  } catch(e){ st.textContent='Upload failed — '+e.message; showToast('Upload failed','error','✗'); }
+}
+
+async function ingestUrls(){
+  const urls = document.getElementById('urls-input').value.trim(); if(!urls) return;
+  const st = document.getElementById('ingest-status');
+  st.innerHTML='<span class="spinner"></span> Processing…';
+  const fd = new FormData(); fd.append('notebook',NOTEBOOK); fd.append('urls',urls);
+  try{
+    const d = await fetch('/api/ingest',{method:'POST',body:fd}).then(r=>r.json());
+    st.textContent=`✓ Added: ${d.results.filter(x=>x.ok).map(x=>x.title).join(', ')||'none'}`;
+    document.getElementById('urls-input').value='';
+    if(d.ingested>0){showToast(`${d.ingested} source(s) added!`,'success','✓');setTimeout(()=>location.reload(),1200);}
+  } catch(e){st.textContent='Failed';showToast('Failed','error','✗');}
+}
+
+// ── Mind Map (vis.js) ──────────────────────────────────────
+let _visNetwork = null;
+
+async function generateGraph(force=false){
+  const btn = document.getElementById('map-gen-btn');
+  const empty = document.getElementById('map-empty');
+  const canvas = document.getElementById('map-canvas');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+  empty.style.display = 'flex';
+  canvas.style.display = 'none';
+  try{
+    const d = await fetch(`/api/graph/${encodeURIComponent(NOTEBOOK)}`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({force})
+    }).then(r=>r.json());
+    if(d.ok){
+      empty.style.display = 'none';
+      canvas.style.display = 'block';
+      _renderGraph(d.nodes, d.edges);
+      if(!force && d.cached) showToast('Loaded cached graph','info');
+      else showToast('Graph generated!','success','✓');
+    } else {
+      empty.querySelector('.text-xs').innerHTML = `<span style="color:var(--accent3)">${d.error}</span>`;
+      showToast(d.error,'error');
+    }
+  } catch(e){
+    showToast('Network error','error');
+  }
+  btn.disabled = false;
+  btn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> Generate';
+}
+
+function _renderGraph(nodes, edges){
+  if(!window.vis){
+    const s = document.createElement('script');
+    s.src = 'https://unpkg.com/vis-network/standalone/umd/vis-network.min.js';
+    s.onload = () => _drawGraph(nodes, edges);
+    document.head.appendChild(s);
+  } else {
+    _drawGraph(nodes, edges);
+  }
+}
+
+function _drawGraph(nodes, edges){
+  const TYPE_COLORS = {
+    concept: '#7C75F5', person: '#F5A623', event: '#00C9A0',
+    place: '#FF6090', finding: '#A78BFA', method: '#38BDF8'
+  };
+  const canvas = document.getElementById('map-canvas');
+  const visNodes = new vis.DataSet(nodes.map(n => ({
+    id: n.id, label: n.label,
+    color: { background: TYPE_COLORS[n.type] || '#7C75F5', border: 'rgba(255,255,255,.15)', highlight: { background: '#fff', border: '#7C75F5' } },
+    font: { color: '#fff', size: 12, face: 'Inter, sans-serif' },
+    shape: 'box', borderWidth: 1,
+    margin: { top: 6, bottom: 6, left: 8, right: 8 },
+    title: n.title ? `Source: ${n.title}` : n.type,
+    shadow: { enabled: true, color: 'rgba(0,0,0,.3)', size: 8, x: 0, y: 2 },
+  })));
+  const visEdges = new vis.DataSet(edges.map((e,i) => ({
+    id: i, from: e.from, to: e.to, label: e.label || '',
+    color: { color: 'rgba(255,255,255,.18)', highlight: '#7C75F5' },
+    font: { color: 'rgba(255,255,255,.5)', size: 10, face: 'Inter, sans-serif' },
+    arrows: { to: { enabled: true, scaleFactor: .6 } },
+    width: 1.5, smooth: { type: 'dynamic' },
+  })));
+  if(_visNetwork){ _visNetwork.destroy(); }
+  _visNetwork = new vis.Network(canvas, { nodes: visNodes, edges: visEdges }, {
+    physics: { stabilization: { iterations: 150 }, barnesHut: { gravitationalConstant: -9000, springLength: 130, damping: 0.15 } },
+    interaction: { hover: true, tooltipDelay: 150, navigationButtons: false, keyboard: false },
+    layout: { improvedLayout: true },
+  });
+  _setupMapClickToChat(_visNetwork);
+
+  // Legend
+  let legend = canvas.parentElement.querySelector('.map-legend');
+  if(!legend){
+    legend = document.createElement('div');
+    legend.className = 'map-legend';
+    legend.style.cssText = 'position:absolute;bottom:8px;left:8px;display:flex;flex-wrap:wrap;gap:5px;pointer-events:none;z-index:1';
+    canvas.parentElement.style.position = 'relative';
+    canvas.parentElement.appendChild(legend);
+  }
+  const usedTypes = [...new Set(nodes.map(n=>n.type).filter(Boolean))];
+  legend.innerHTML = usedTypes.map(t => `
+    <div style="display:flex;align-items:center;gap:4px;background:rgba(0,0,0,.55);border-radius:4px;padding:2px 7px;backdrop-filter:blur(4px)">
+      <span style="width:8px;height:8px;border-radius:2px;background:${TYPE_COLORS[t]||'#7C75F5'};flex-shrink:0"></span>
+      <span style="font-size:.6rem;color:rgba(255,255,255,.8);font-weight:600;text-transform:capitalize">${t}</span>
+    </div>`).join('');
+  legend.innerHTML += `<div style="display:flex;align-items:center;gap:4px;background:rgba(0,0,0,.55);border-radius:4px;padding:2px 7px;backdrop-filter:blur(4px)">
+    <span style="font-size:.6rem;color:rgba(255,255,255,.5)">Click node to ask about it</span></div>`;
+}
+
+// ── Quiz ───────────────────────────────────────────────────
+let _quizData = [];
+let _quizAnswered = 0;
+let _quizCorrect = 0;
+
+async function generateQuiz(force=false){
+  const btn = document.getElementById('quiz-gen-btn');
+  const empty = document.getElementById('quiz-empty');
+  const container = document.getElementById('quiz-container');
+  const results = document.getElementById('quiz-results');
+  const progWrap = document.getElementById('quiz-progress-wrap');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+  container.classList.add('hidden');
+  results.classList.add('hidden');
+  progWrap.style.display = 'none';
+  empty.style.display = 'flex';
+  try{
+    const d = await fetch(`/api/quiz/${encodeURIComponent(NOTEBOOK)}`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({force})
+    }).then(r=>r.json());
+    if(d.ok){
+      _quizData = d.questions;
+      _quizAnswered = 0; _quizCorrect = 0;
+      document.getElementById('quiz-score-badge').style.display = 'none';
+      empty.style.display = 'none';
+      progWrap.style.display = 'block';
+      container.classList.remove('hidden');
+      _renderQuiz();
+      _updateQuizProgress();
+      if(!force && d.cached) showToast('Loaded cached quiz','info');
+      else showToast('Quiz generated!','success','✓');
+    } else {
+      empty.querySelector('.text-xs').innerHTML = `<span style="color:var(--accent3)">${d.error}</span>`;
+      showToast(d.error,'error');
+    }
+  } catch(e){ showToast('Network error','error'); }
+  btn.disabled = false;
+  btn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> Generate';
+}
+
+function _updateQuizProgress(){
+  const total = _quizData.length;
+  const pct = total ? (_quizAnswered / total) * 100 : 0;
+  document.getElementById('quiz-progress-bar').style.width = pct + '%';
+  document.getElementById('quiz-progress-label').textContent = `${_quizAnswered} of ${total} answered`;
+  document.getElementById('quiz-correct-label').textContent = `${_quizCorrect} correct`;
+}
+
+function _renderQuiz(){
+  const c = document.getElementById('quiz-container');
+  c.innerHTML = '';
+  _quizData.forEach((q,i) => {
+    const div = document.createElement('div');
+    div.className = 'quiz-q';
+    div.id = `quiz-q-${i}`;
+    div.innerHTML = `
+      <div class="quiz-question">${i+1}. ${q.question}</div>
+      ${q.options.map((opt,j) => `
+        <button class="quiz-option" onclick="answerQuiz(${i},'${['A','B','C','D'][j]}',this)">
+          <span style="font-weight:700;color:var(--accent-bright);flex-shrink:0">${['A','B','C','D'][j]}</span>
+          <span>${opt.replace(/^[ABCD]\)\s*/,'')}</span>
+        </button>
+      `).join('')}
+      <div class="quiz-explanation" id="quiz-exp-${i}">${q.explanation || ''}<br><em style="font-size:.7rem;opacity:.7">Source: ${q.source||''}</em></div>
+    `;
+    c.appendChild(div);
+  });
+}
+
+function answerQuiz(idx, chosen, btn){
+  const q = _quizData[idx];
+  const qEl = document.getElementById(`quiz-q-${idx}`);
+  const expEl = document.getElementById(`quiz-exp-${idx}`);
+  if(qEl.dataset.answered) return;
+  qEl.dataset.answered = '1';
+  qEl.querySelectorAll('.quiz-option').forEach(b => b.disabled = true);
+  const correct = q.answer;
+  qEl.querySelectorAll('.quiz-option').forEach((b,j) => {
+    const letter = ['A','B','C','D'][j];
+    if(letter === correct) b.classList.add('correct');
+    else if(letter === chosen && chosen !== correct) b.classList.add('wrong');
+  });
+  expEl.style.display = 'block';
+  _quizAnswered++;
+  if(chosen === correct) _quizCorrect++;
+  _updateQuizProgress();
+  if(_quizAnswered === _quizData.length){
+    const score = _quizCorrect;
+    const total = _quizData.length;
+    const pct = Math.round((score/total)*100);
+    const badge = document.getElementById('quiz-score-badge');
+    badge.textContent = `${score}/${total}`;
+    badge.style.display = 'inline-flex';
+    badge.className = pct >= 70 ? 'badge badge-green' : 'badge badge-red';
+    const results = document.getElementById('quiz-results');
+    results.classList.remove('hidden');
+    document.getElementById('quiz-results-emoji').textContent = pct === 100 ? '🏆' : pct >= 70 ? '🎉' : pct >= 40 ? '📚' : '💪';
+    document.getElementById('quiz-results-score').textContent = `${score} / ${total} correct (${pct}%)`;
+    document.getElementById('quiz-results-msg').textContent = pct === 100 ? 'Perfect score!' : pct >= 70 ? 'Great work! Review the missed questions above.' : 'Keep studying — generate a new quiz to try again.';
+    showToast(`Quiz complete: ${score}/${total}`, pct >= 70 ? 'success' : 'info', pct >= 70 ? '✓' : '📚');
+  }
+}
+
+// ── Flashcards ─────────────────────────────────────────────
+let _fcCards = [];
+let _fcIndex = 0;
+let _fcMastered = new Set();
+let _fcReview = new Set();
+
+async function generateFlashcards(force=false){
+  const btn = document.getElementById('fc-gen-btn');
+  const empty = document.getElementById('fc-empty');
+  const deck = document.getElementById('fc-deck');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+  deck.classList.add('hidden');
+  empty.style.display = 'flex';
+  try{
+    const d = await fetch(`/api/flashcards/${encodeURIComponent(NOTEBOOK)}`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({force})
+    }).then(r=>r.json());
+    if(d.ok){
+      _fcCards = d.cards;
+      _fcIndex = 0;
+      _fcMastered = new Set();
+      _fcReview = new Set();
+      empty.style.display = 'none';
+      deck.classList.remove('hidden');
+      _renderCard();
+      if(!force && d.cached) showToast('Loaded cached flashcards','info');
+      else showToast(`${_fcCards.length} flashcards ready!`,'success','✓');
+    } else {
+      empty.querySelector('.text-xs').innerHTML = `<span style="color:var(--accent3)">${d.error}</span>`;
+      showToast(d.error,'error');
+    }
+  } catch(e){ showToast('Network error','error'); }
+  btn.disabled = false;
+  btn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> Generate';
+}
+
+function _renderCard(){
+  if(!_fcCards.length) return;
+  const c = _fcCards[_fcIndex];
+  document.getElementById('fc-card').classList.remove('flipped');
+  document.getElementById('fc-front-text').textContent = c.front;
+  document.getElementById('fc-back-text').textContent = c.back;
+  document.getElementById('fc-source-text').textContent = c.source ? `Source: ${c.source}` : '';
+  document.getElementById('fc-counter').textContent = `${_fcIndex+1} / ${_fcCards.length}`;
+  document.getElementById('fc-progress').textContent = `${_fcIndex+1}/${_fcCards.length}`;
+  const mastered = _fcMastered.size;
+  const total = _fcCards.length;
+  const lbl = document.getElementById('fc-mastery-label');
+  if(mastered > 0){
+    lbl.textContent = `${mastered}/${total} mastered · click to flip`;
+    lbl.style.color = 'var(--accent2)';
+  } else {
+    lbl.textContent = 'Click card to flip · ← → to navigate';
+    lbl.style.color = '';
+  }
+}
+
+function flipCard(){ document.getElementById('fc-card').classList.toggle('flipped'); }
+
+function fcKnow(){
+  _fcMastered.add(_fcIndex);
+  _fcReview.delete(_fcIndex);
+  showToast('Marked as known!','success','✓');
+  if(_fcIndex < _fcCards.length - 1){ _fcIndex++; _renderCard(); }
+  else if(_fcMastered.size === _fcCards.length){
+    showToast(`All ${_fcCards.length} cards mastered!`, 'success', '🏆');
+  }
+}
+
+function fcReview(){
+  _fcReview.add(_fcIndex);
+  _fcMastered.delete(_fcIndex);
+  if(_fcIndex < _fcCards.length - 1){ _fcIndex++; _renderCard(); }
+  else { showToast('End of deck — review flagged cards','info'); }
+}
+
+function fcNext(){ if(_fcIndex < _fcCards.length-1){ _fcIndex++; _renderCard(); } }
+function fcPrev(){ if(_fcIndex > 0){ _fcIndex--; _renderCard(); } }
+
+document.addEventListener('keydown', e => {
+  const fcDeck = document.getElementById('fc-deck');
+  if(fcDeck && !fcDeck.classList.contains('hidden')){
+    if(e.key === 'ArrowRight') fcNext();
+    else if(e.key === 'ArrowLeft') fcPrev();
+    else if(e.key === ' '){ e.preventDefault(); flipCard(); }
+    else if(e.key === 'Enter') fcKnow();
+  }
+});
+
+// ── Knowledge Stats ─────────────────────────────────────────
+const KS_CATEGORY_COLORS = {
+  'main theme': '#7C75F5', 'method': '#38BDF8', 'finding': '#00C9A0',
+  'person': '#F5A623', 'place': '#FF6090', 'event': '#A78BFA', 'definition': '#FCD34D'
+};
+
+async function generateKStats(force=false){
+  const btn = document.getElementById('ks-gen-btn');
+  const empty = document.getElementById('ks-empty');
+  const content = document.getElementById('ks-content');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+  content.classList.add('hidden');
+  empty.style.display = 'flex';
+  try{
+    const d = await fetch(`/api/knowledge_summary/${encodeURIComponent(NOTEBOOK)}`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({force})
+    }).then(r=>r.json());
+    if(d.ok){
+      empty.style.display = 'none';
+      content.classList.remove('hidden');
+      _renderKStats(d);
+      if(!force && d.cached) showToast('Loaded cached summary','info');
+      else showToast('Knowledge summary ready!','success','✓');
+    } else {
+      empty.querySelector('.text-xs').innerHTML = `<span style="color:var(--accent3)">${d.error}</span>`;
+      showToast(d.error,'error');
+    }
+  } catch(e){ showToast('Network error','error'); }
+  btn.disabled = false;
+  btn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> Generate';
+}
+
+function _renderKStats(d){
+  document.getElementById('ks-summary').textContent = d.summary || '';
+
+  const barsEl = document.getElementById('ks-bars');
+  barsEl.innerHTML = '';
+  const maxScore = Math.max(...(d.terms||[]).map(t=>t.score), 1);
+  (d.terms||[]).forEach(t => {
+    const pct = Math.round((t.score / maxScore) * 100);
+    const color = KS_CATEGORY_COLORS[t.category] || '#7C75F5';
+    const row = document.createElement('div');
+    row.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
+        <span style="font-size:.76rem;font-weight:600;color:#fff">${t.label}</span>
+        <span style="font-size:.63rem;color:${color};font-weight:600;text-transform:uppercase;letter-spacing:.04em">${t.category||''}</span>
+      </div>
+      <div style="height:6px;background:var(--surface-2);border-radius:3px;overflow:hidden">
+        <div style="height:100%;width:${pct}%;background:${color};border-radius:3px;transition:width .6s ease"></div>
+      </div>`;
+    barsEl.appendChild(row);
+  });
+
+  const srcEl = document.getElementById('ks-sources');
+  srcEl.innerHTML = '';
+  (d.sources||[]).forEach((s,i) => {
+    const div = document.createElement('div');
+    div.style.cssText = 'display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:4px;background:rgba(255,255,255,.03);border:1px solid var(--border)';
+    div.innerHTML = `<span style="font-size:.65rem;color:var(--accent);font-weight:700;flex-shrink:0">${i+1}</span>
+      <span style="font-size:.74rem;color:var(--text-secondary)" class="truncate">${s}</span>`;
+    srcEl.appendChild(div);
+  });
+}
+
+// ── Mind Map: click node to chat ────────────────────────────
+function _setupMapClickToChat(network){
+  network.on('click', params => {
+    if(!params.nodes.length) return;
+    const nodeId = params.nodes[0];
+    const node = network.body.data.nodes.get(nodeId);
+    if(!node) return;
+    const inp = document.getElementById('chat-input');
+    if(inp){
+      inp.value = `Tell me more about "${node.label}" based on the sources.`;
+      inp.focus();
+      inp.style.height = 'auto';
+      inp.style.height = inp.scrollHeight + 'px';
+    }
+  });
+}
+{% endblock %}

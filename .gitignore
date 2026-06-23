@@ -1,0 +1,58 @@
+# ── Secrets / Credentials ────────────────────────────────────────────────────
+.env
+data/providers.json
+
+# ── User data (projects, vector DB, uploads) ─────────────────────────────────
+data/chroma/
+data/projects/
+data/trash/
+data/surreal_data/
+data/notebook_data/
+
+# ── Generated output ──────────────────────────────────────────────────────────
+output/
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+.env/
+
+# ── Editor / OS ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+.idea/
+.vscode/settings.json
+
+# ── Claude session files ──────────────────────────────────────────────────────
+.claude/
+
+# ── Obsolete / replaced files ─────────────────────────────────────────────────
+install_all.ps1
+run.bat
+setup.bat
+dashboard.bat
+diagnose.bat
+docker-compose.yml
+engine/requirements.txt
+webapp/templates/notebooks.html
+
+# ── Diagnostic / temporary files ──────────────────────────────────────────────
+diagnostic.txt
+*.log
+Pictures/
